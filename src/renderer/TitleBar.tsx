@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 type Props = {
   menuOpen: boolean
   onToggleMenu: () => void
-  menu: React.ReactNode
+  menu: ReactNode
+  brandName?: string
 }
 
 function IconMinimize() {
@@ -64,7 +65,7 @@ function IconClose() {
  * Windows 无边框在 Alt+Tab / 切软件后再回来时，CSS drag 经常失效；
  * JS 拖窗不受影响。
  */
-export default function TitleBar({ menuOpen, onToggleMenu, menu }: Props) {
+export default function TitleBar({ menuOpen, onToggleMenu, menu, brandName = 'Q-Music' }: Props) {
   const [maximized, setMaximized] = useState(false)
   const dragging = useRef(false)
   const api = window.qmusic
@@ -115,7 +116,7 @@ export default function TitleBar({ menuOpen, onToggleMenu, menu }: Props) {
           setMaximized(next)
         }}
       >
-        <span className="titlebar-brand">Q-Music</span>
+        <span className="titlebar-brand">{brandName}</span>
       </div>
       <div className="titlebar-actions">
         <div className="menu-wrap">

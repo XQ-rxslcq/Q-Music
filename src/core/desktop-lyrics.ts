@@ -99,6 +99,33 @@ export const DEFAULT_DESKTOP_LYRICS: DesktopLyricsSettings = {
   },
 }
 
+/** 桌面歌词循环：三态（显未锁→锁定→隐）或两态（显↔隐） */
+export type DesktopLyricsCycleMode = 'two' | 'three'
+
+export function nextDesktopLyricsCycle(
+  current: Pick<DesktopLyricsSettings, 'visible' | 'locked'>,
+  mode: DesktopLyricsCycleMode = 'three',
+): { visible: boolean; locked: boolean; toast: string } {
+  const visible = Boolean(current.visible)
+  const locked = current.locked !== false
+
+  if (mode === 'two') {
+    if (!visible) {
+      return { visible: true, locked: true, toast: '桌面歌词：已显示' }
+    }
+    return { visible: false, locked: true, toast: '桌面歌词：已隐藏' }
+  }
+
+  // three: 隐藏 → 显示(未锁) → 显示(锁定) → 隐藏
+  if (!visible) {
+    return { visible: true, locked: false, toast: '桌面歌词：已显示（未锁定，可拖缩放）' }
+  }
+  if (!locked) {
+    return { visible: true, locked: true, toast: '桌面歌词：已锁定（点击穿透）' }
+  }
+  return { visible: false, locked: true, toast: '桌面歌词：已隐藏' }
+}
+
 /** 框内行位预设 */
 export const LINE_LAYOUT_PRESETS: Array<{
   id: string

@@ -10,6 +10,8 @@ release/
 
 # 运行时 / 隐私
 data/
+qmdata/
+qmdata-location.json
 logs/
 scratch/
 *.local

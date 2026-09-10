@@ -60,13 +60,14 @@ function buildMenu() {
     },
     { type: 'separator' },
     { label: '打开主界面', click: () => h.sendAction('show-main') },
-    { label: '退出 Q-Music', click: () => h.sendAction('quit-app') },
+    { label: '退出', click: () => h.sendAction('quit-app') },
   ])
 }
 
 export function createAppTray(opts: {
   appRoot: string
   mainDir: string
+  displayName?: string
   handlers: TrayHandlers
 }) {
   handlers = opts.handlers
@@ -78,7 +79,8 @@ export function createAppTray(opts: {
   tray = new Tray(icon.isEmpty() ? nativeImage.createFromDataURL(
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKElEQVQ4T2NkYGD4z0ABYBzVMKoBWDQMHBgYGBj/MzAw/B8YGBgYRg0YNgAAf/sD/QVxQXkAAAAASUVORK5CYII=',
   ) : icon)
-  tray.setToolTip('Q-Music')
+  const name = opts.displayName || 'Q-Music'
+  tray.setToolTip(name)
   tray.on('click', () => handlers?.sendAction('show-main'))
   tray.on('right-click', () => {
     tray?.popUpContextMenu(buildMenu())
@@ -89,6 +91,10 @@ export function createAppTray(opts: {
 
 export function refreshTrayMenu() {
   if (tray && !tray.isDestroyed()) tray.setContextMenu(buildMenu())
+}
+
+export function setTrayToolTip(text: string) {
+  if (tray && !tray.isDestroyed()) tray.setToolTip(text || 'Q-Music')
 }
 
 export function destroyAppTray() {

@@ -1,4 +1,5 @@
 import { appJoin, resolveDataDir } from './app-paths'
+import path from 'node:path'
 
 export type {
   Category,
@@ -27,47 +28,56 @@ export {
   TITLE_LANG_TAG,
 } from './library-model'
 
-export function resolveThemePath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'theme.json')
+/** 下列路径均相对 qmdata 根目录（参数名 dataDir） */
+
+export function resolveThemePath(dataDir: string) {
+  return path.join(dataDir, 'theme.json')
 }
 
-export function resolveHotkeysPath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'hotkeys.json')
+export function resolveHotkeysPath(dataDir: string) {
+  return path.join(dataDir, 'hotkeys.json')
 }
 
-export function resolveLibraryDir(appRoot: string) {
-  return appJoin(appRoot, 'data', 'library')
+export function resolveLibraryDir(dataDir: string) {
+  return path.join(dataDir, 'library')
 }
 
-export function resolveRootsPath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'library', 'roots.json')
+export function resolveRootsPath(dataDir: string) {
+  return path.join(dataDir, 'library', 'roots.json')
 }
 
-export function resolveTracksPath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'library', 'tracks.json')
+export function resolveTracksPath(dataDir: string) {
+  return path.join(dataDir, 'library', 'tracks.json')
 }
 
-export function resolveLyricsMapPath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'library', 'lyrics-map.json')
+export function resolveLyricsMapPath(dataDir: string) {
+  return path.join(dataDir, 'library', 'lyrics-map.json')
 }
 
-/** 统一歌词目录（与音乐根类似，相对 AppRoot 或绝对路径） */
-export function resolveLyricsRootPath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'library', 'lyrics-root.json')
+/** 统一歌词目录配置文件 */
+export function resolveLyricsRootPath(dataDir: string) {
+  return path.join(dataDir, 'library', 'lyrics-root.json')
 }
 
-export function resolveCategoriesPath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'library', 'categories.json')
+export function resolveCategoriesPath(dataDir: string) {
+  return path.join(dataDir, 'library', 'categories.json')
 }
 
-export function resolveGainsPath(appRoot: string) {
-  return appJoin(appRoot, 'data', 'library', 'gains.json')
+export function resolveGainsPath(dataDir: string) {
+  return path.join(dataDir, 'library', 'gains.json')
 }
 
-export function resolveBackgroundsDir(appRoot: string) {
-  return appJoin(appRoot, 'data', 'backgrounds')
+export function resolveBackgroundsDir(dataDir: string) {
+  return path.join(dataDir, 'backgrounds')
 }
 
-export function libraryDataDirs(appRoot: string): string[] {
-  return [resolveDataDir(appRoot), resolveLibraryDir(appRoot), resolveBackgroundsDir(appRoot)]
+export function libraryDataDirs(dataDir: string): string[] {
+  return [dataDir, resolveLibraryDir(dataDir), resolveBackgroundsDir(dataDir)]
 }
+
+/** @deprecated 兼容旧测试引用 */
+export function resolveLegacyDataDir(appRoot: string) {
+  return resolveDataDir(appRoot)
+}
+
+void appJoin

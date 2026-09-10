@@ -1,5 +1,6 @@
-# electron-builder 配置（便携 Windows 应用）
-# 用户：双击 exe；整目录可拷到任意路径
+# electron-builder 配置
+# - portable：单文件便携包
+# - nsis：可选安装路径的安装包（安装内容 = win-unpacked，不是把应用再压进一个运行时 exe）
 # 输出目录由 scripts/dist-win.ps1 设为 dist/<version>/
 
 appId: com.qmusic.app
@@ -21,11 +22,24 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: Q-Music-${version}-portable.${ext}
+    - target: nsis
+      arch:
+        - x64
 portable:
   requestExecutionLevel: user
+  artifactName: Q-Music-${version}-portable.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Q-Music
+  deleteAppDataOnUninstall: false
+  artifactName: Q-Music-${version}-setup.${ext}
 extraMetadata:
   main: dist-electron/main.js
   name: Q-Music
   productName: Q-Music
-  description: Q-Music portable player
+  description: Q-Music player

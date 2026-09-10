@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import path from 'node:path'
 import {
   appJoin,
+  ensureQmdataSuffix,
   fromRelativeToRoot,
   resolveAppRoot,
   resolveDataDir,
@@ -45,9 +46,9 @@ describe('resolveAppRoot', () => {
 describe('relative joins', () => {
   it('appJoin never needs drive letter literals', () => {
     const root = path.join('X:', 'Anywhere', 'Q-Music')
-    expect(resolveDataDir(root)).toBe(path.join(root, 'data'))
-    expect(resolveLogsDir(root)).toBe(path.join(root, 'data', 'logs'))
-    expect(appJoin(root, 'data', 'config.json')).toBe(path.join(root, 'data', 'config.json'))
+    expect(resolveDataDir(root)).toBe(path.join(root, 'qmdata'))
+    expect(resolveLogsDir(path.join(root, 'qmdata'))).toBe(path.join(root, 'qmdata', 'logs'))
+    expect(appJoin(root, 'qmdata', 'config.json')).toBe(path.join(root, 'qmdata', 'config.json'))
   })
 
   it('roundtrips relative music paths under root', () => {
@@ -62,5 +63,31 @@ describe('relative joins', () => {
     const root = path.join('C:', 'Apps', 'Q-Music')
     const external = path.join('D:', 'Songs', 'b.mp3')
     expect(toRelativeIfUnderRoot(root, external)).toBe(external)
+  })
+})
+
+describe('defaultQmdataDir', () => {
+  it('defaults beside app root', async () => {
+    const { defaultQmdataDir, resolveQmdataDir } = await import('../src/core/app-paths')
+    const appRoot = path.join('D:', 'Apps', 'Q-Music')
+    const appData = path.join('C:', 'Users', 'x', 'AppData', 'Roaming')
+    expect(defaultQmdataDir(appRoot)).toBe(path.join(appRoot, 'qmdata'))
+    const resolved = resolveQmdataDir(appRoot, appData)
+    expect(resolved.dataDir).toBe(path.join(appRoot, 'qmdata'))
+  })
+})
+
+describe('ensureQmdataSuffix', () => {
+  it('appends qmdata when missing', () => {
+    const parent = path.join('D:', 'MusicStore')
+    expect(ensureQmdataSuffix(parent)).toBe(path.join(parent, 'qmdata'))
+  })
+
+  it('does not double-append when already ends with qmdata', () => {
+    const dir = path.join('D:', 'MusicStore', 'qmdata')
+    expect(ensureQmdataSuffix(dir)).toBe(path.resolve(dir))
+    expect(ensureQmdataSuffix(path.join('D:', 'MusicStore', 'QMDATA'))).toBe(
+      path.resolve(path.join('D:', 'MusicStore', 'QMDATA')),
+    )
   })
 })

@@ -67,7 +67,7 @@ async function fetchLrclibOnce(opts: {
   const url = `https://lrclib.net/api/search?${params.toString()}`
   const res = await fetch(url, {
     headers: {
-      'User-Agent': 'Q-Music/1.0.0 (personal local lyrics matching; Electron)',
+      'User-Agent': 'Q-Music/1.2 (personal local lyrics matching; Electron)',
       Accept: 'application/json',
     },
   })

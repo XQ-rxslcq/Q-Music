@@ -48,7 +48,14 @@ const api = {
     ipcRenderer.on('theme:changed', handler)
     return () => ipcRenderer.removeListener('theme:changed', handler)
   },
+  onDisplayNameChanged: (cb: (name: string) => void): (() => void) => {
+    const handler = (_e: Electron.IpcRendererEvent, name: string) => cb(name)
+    ipcRenderer.on('app:displayName', handler)
+    return () => ipcRenderer.removeListener('app:displayName', handler)
+  },
   getInitInfo: () => ipcRenderer.invoke('app:getInitInfo'),
+  setNowPlaying: (payload: { title?: string | null; artist?: string | null } | null) =>
+    ipcRenderer.invoke('app:setNowPlaying', payload),
   getPlayMode: () => ipcRenderer.invoke('player:getPlayMode'),
   setPlayMode: (mode: string) => ipcRenderer.invoke('player:setPlayMode', mode),
   getTheme: () => ipcRenderer.invoke('theme:get'),
@@ -57,6 +64,8 @@ const api = {
   getLibrary: () => ipcRenderer.invoke('library:get'),
   addMusicRoot: () => ipcRenderer.invoke('library:addRoot'),
   removeMusicRoot: (rootId: string) => ipcRenderer.invoke('library:removeRoot', rootId),
+  openMusicRoot: (rootId: string) => ipcRenderer.invoke('library:openRoot', rootId) as Promise<string>,
+  openPath: (target: string) => ipcRenderer.invoke('shell:openPath', target) as Promise<string>,
   rescanLibrary: () => ipcRenderer.invoke('library:rescan'),
   updateTrack: (patch: unknown) => ipcRenderer.invoke('library:updateTrack', patch),
   addCategory: (name: string) => ipcRenderer.invoke('library:addCategory', name),
@@ -68,6 +77,18 @@ const api = {
   setImportTarget: (rootId: string | null) => ipcRenderer.invoke('config:setImportTarget', rootId),
   getAllowMultiInstance: () => ipcRenderer.invoke('config:getAllowMultiInstance'),
   setAllowMultiInstance: (allow: boolean) => ipcRenderer.invoke('config:setAllowMultiInstance', allow),
+  getBehavior: () => ipcRenderer.invoke('config:getBehavior'),
+  setBehavior: (patch: {
+    allowMultiInstance?: boolean
+    persistQueue?: boolean
+    desktopLyricsTripleCycle?: boolean
+  }) => ipcRenderer.invoke('config:setBehavior', patch),
+  pickDataDir: () => ipcRenderer.invoke('config:pickDataDir'),
+  relocateDataDir: (targetDir: string) => ipcRenderer.invoke('config:relocateDataDir', targetDir),
+  getQueue: () => ipcRenderer.invoke('queue:get'),
+  setQueue: (state: { trackIds: string[]; currentId: string | null }) =>
+    ipcRenderer.invoke('queue:set', state),
+  getFailedHotkeys: () => ipcRenderer.invoke('hotkeys:failedGlobals'),
   getPathForFile: (file: File) => {
     try {
       return webUtils.getPathForFile(file)
@@ -102,6 +123,7 @@ const api = {
     ipcRenderer.on('hotkey:action', handler)
     return () => ipcRenderer.removeListener('hotkey:action', handler)
   },
+  dispatchHotkey: (action: string) => ipcRenderer.invoke('hotkeys:dispatch', action),
   getHotkeys: () => ipcRenderer.invoke('hotkeys:get'),
   setHotkeys: (bindings: unknown) => ipcRenderer.invoke('hotkeys:set', bindings),
   ffmpegAvailable: (): Promise<boolean> => ipcRenderer.invoke('ffmpeg:available'),

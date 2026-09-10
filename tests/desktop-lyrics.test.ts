@@ -116,10 +116,11 @@ describe('global hotkey map', () => {
       'seek-fwd',
       'toggle-desktop-lyrics',
       'toggle-desktop-lyrics-lock',
+      'show-main',
     ] as const) {
       expect(actions.has(a)).toBe(true)
     }
-    expect(GLOBAL_HOTKEY_MAP.length).toBe(9)
+    expect(GLOBAL_HOTKEY_MAP.length).toBe(10)
   })
 
   it('accelerators are unique and use Ctrl+Alt', () => {

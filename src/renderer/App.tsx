@@ -6,21 +6,24 @@ import TransportButtons from './TransportButtons'
 import TrimDrawer from './TrimDrawer'
 import TrackEditDrawer from './TrackEditDrawer'
 import RenameDrawer from './RenameDrawer'
+import RootsDrawer from './RootsDrawer'
 import ImportDrawer, { type ImportDraft } from './ImportDrawer'
 import LyricsMatchDrawer from './LyricsMatchDrawer'
 import LibraryContextMenu, { type CtxAction } from './LibraryContextMenu'
 import SongPage from './SongPage'
 import PlaylistPicker from './PlaylistPicker'
 import HotkeysDrawer from './HotkeysDrawer'
+import BehaviorDrawer from './BehaviorDrawer'
 import { formatTime } from '../core/format'
 import { toMediaUrl } from '../core/media-url'
 import { resolveLyricLines, type LyricLine } from '../core/lyrics'
 import { DEFAULT_THEME, mergeDesktopLyrics, mergePageLyrics } from '../core/library-model'
+import { nextDesktopLyricsCycle } from '../core/desktop-lyrics'
 import { resolvePrimaryTitle } from '../core/title-display'
 import TrackTitleCell from './TrackTitleCell'
 import {
   DEFAULT_HOTKEY_BINDINGS,
-  matchInAppBinding,
+  matchGlobalAccelInApp,
   mergeHotkeyBindings,
   type HotkeyAction,
   type HotkeyBinding,
@@ -106,8 +109,12 @@ export default function App() {
   const [playlistOpen, setPlaylistOpen] = useState(false)
   const [libraryQuery, setLibraryQuery] = useState('')
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
+  const [behaviorOpen, setBehaviorOpen] = useState(false)
+  const [rootsOpen, setRootsOpen] = useState(false)
   const [hotkeys, setHotkeys] = useState<HotkeyBinding[]>(() => [...DEFAULT_HOTKEY_BINDINGS])
   const [hotkeysReady, setHotkeysReady] = useState(false)
+  const [failedGlobals, setFailedGlobals] = useState<string[]>([])
+  const queuePersistReady = useRef(false)
   const [trimOpen, setTrimOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [editTrack, setEditTrack] = useState<Track | null>(null)
@@ -118,10 +125,10 @@ export default function App() {
   const [importTargetRootId, setImportTargetRootId] = useState<string | null>(null)
   const [importScanning, setImportScanning] = useState(false)
   const [dropActive, setDropActive] = useState(false)
-  const [allowMultiInstance, setAllowMultiInstance] = useState(false)
   const [lyricsMatchOpen, setLyricsMatchOpen] = useState(false)
   const [lyricsMatchTrackId, setLyricsMatchTrackId] = useState<string | null>(null)
   const [lyricsRootAbs, setLyricsRootAbs] = useState<string | null>(null)
+  const [lyricsTripleCycle, setLyricsTripleCycle] = useState(true)
   const [ctx, setCtx] = useState<{
     x: number
     y: number
@@ -134,6 +141,7 @@ export default function App() {
   const [normalize, setNormalize] = useState(() => localStorage.getItem(NORM_KEY) !== '0')
   const [gainMap, setGainMap] = useState<Record<string, number>>({})
   const [initHint, setInitHint] = useState<string | null>(null)
+  const [displayName, setDisplayName] = useState('Q-Music')
   const [toast, setToast] = useState<{ kind: 'info' | 'ok' | 'error'; text: string } | null>(null)
   const [scanningAll, setScanningAll] = useState(false)
   const scanAbortRef = useRef(false)
@@ -161,8 +169,9 @@ export default function App() {
   useEffect(() => {
     void (async () => {
       const info = await window.qmusic.getInitInfo()
+      if (info?.displayName) setDisplayName(info.displayName)
       if (info?.firstRun) {
-        setInitHint(`首次启动：已在程序目录自动创建 data/（${info.dataDir}）`)
+        setInitHint(`首次启动：已创建数据目录 qmdata（${info.dataDir}）`)
       }
       const savedMode = info?.config?.playMode
       if (savedMode === 'sequence' || savedMode === 'loop' || savedMode === 'single' || savedMode === 'shuffle') {
@@ -175,13 +184,16 @@ export default function App() {
           // keep default
         }
       }
-      if (info?.config?.allowMultiInstance != null) {
-        setAllowMultiInstance(Boolean(info.config.allowMultiInstance))
-      } else if (typeof window.qmusic.getAllowMultiInstance === 'function') {
+      if (info?.config?.desktopLyricsTripleCycle != null) {
+        setLyricsTripleCycle(info.config.desktopLyricsTripleCycle !== false)
+      } else {
         try {
-          setAllowMultiInstance(await window.qmusic.getAllowMultiInstance())
+          const b = await window.qmusic.getBehavior?.()
+          if (b && typeof b.desktopLyricsTripleCycle === 'boolean') {
+            setLyricsTripleCycle(b.desktopLyricsTripleCycle)
+          }
         } catch {
-          // default false
+          // default triple
         }
       }
       const tp = await window.qmusic.getTheme()
@@ -204,6 +216,12 @@ export default function App() {
           setHotkeys(mergeHotkeyBindings(DEFAULT_HOTKEY_BINDINGS))
         }
       }
+      try {
+        const failed = await window.qmusic.getFailedHotkeys?.()
+        if (Array.isArray(failed)) setFailedGlobals(failed)
+      } catch {
+        // ignore
+      }
       setHotkeysReady(true)
       const lib = await window.qmusic.getLibrary()
       applyLibrary(lib)
@@ -213,6 +231,25 @@ export default function App() {
       } catch {
         setImportTargetRootId(lib.roots[0]?.id || null)
       }
+      // 恢复播放队列
+      try {
+        const q = await window.qmusic.getQueue()
+        if (q?.trackIds?.length && lib.playable?.length) {
+          const byId = new Map(lib.playable.map((t) => [t.id, t]))
+          const restored = q.trackIds.map((id) => byId.get(id)).filter(Boolean) as Track[]
+          if (restored.length) {
+            const idx = Math.max(
+              0,
+              q.currentId ? restored.findIndex((t) => t.id === q.currentId) : 0,
+            )
+            setQueue(restored)
+            setIndex(idx < 0 ? 0 : idx)
+          }
+        }
+      } catch {
+        // ignore
+      }
+      queuePersistReady.current = true
       if (info?.dataDir) {
         console.info('[Q-Music] dataDir =', info.dataDir)
       }
@@ -270,8 +307,20 @@ export default function App() {
   useEffect(() => {
     if (!hotkeysReady) return
     if (typeof window.qmusic.setHotkeys !== 'function') return
-    void window.qmusic.setHotkeys(hotkeys)
+    void window.qmusic.setHotkeys(hotkeys).then((res) => {
+      const failed = (res as { failedGlobals?: string[] })?.failedGlobals
+      if (Array.isArray(failed)) setFailedGlobals(failed)
+    })
   }, [hotkeys, hotkeysReady])
+
+  useEffect(() => {
+    if (!queuePersistReady.current) return
+    if (typeof window.qmusic.setQueue !== 'function') return
+    void window.qmusic.setQueue({
+      trackIds: queue.map((t) => t.id),
+      currentId: queue[index]?.id ?? null,
+    })
+  }, [queue, index])
 
   useEffect(() => {
     localStorage.setItem(NORM_KEY, normalize ? '1' : '0')
@@ -440,29 +489,21 @@ export default function App() {
   const cycleDesktopLyrics = useCallback(() => {
     setTheme((t) => {
       const dl = t.desktopLyrics
-      const visible = Boolean(dl?.visible)
-      const locked = dl?.locked !== false
-      if (!visible) {
-        setToast({ kind: 'ok', text: '桌面歌词：已显示（未锁定，可拖缩放）' })
-        return {
-          ...t,
-          desktopLyrics: mergeDesktopLyrics({ ...(dl || {}), visible: true, locked: false }),
-        }
-      }
-      if (!locked) {
-        setToast({ kind: 'ok', text: '桌面歌词：已锁定（点击穿透）' })
-        return {
-          ...t,
-          desktopLyrics: mergeDesktopLyrics({ ...(dl || {}), visible: true, locked: true }),
-        }
-      }
-      setToast({ kind: 'ok', text: '桌面歌词：已隐藏' })
+      const step = nextDesktopLyricsCycle(
+        { visible: Boolean(dl?.visible), locked: dl?.locked !== false },
+        lyricsTripleCycle ? 'three' : 'two',
+      )
+      setToast({ kind: 'ok', text: step.toast })
       return {
         ...t,
-        desktopLyrics: mergeDesktopLyrics({ ...(dl || {}), visible: false, locked: true }),
+        desktopLyrics: mergeDesktopLyrics({
+          ...(dl || {}),
+          visible: step.visible,
+          locked: step.locked,
+        }),
       }
     })
-  }, [])
+  }, [lyricsTripleCycle])
 
   const toggleDesktopLyrics = useCallback(() => {
     cycleDesktopLyrics()
@@ -539,15 +580,22 @@ export default function App() {
     if (!('mediaSession' in navigator)) return
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: current ? trackLabel(current) : 'Q-Music',
-        artist: current?.artist || 'Q-Music',
-        album: 'Q-Music',
+        title: current ? trackLabel(current) : displayName,
+        artist: current?.artist || displayName,
+        album: displayName,
       })
       navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'
     } catch {
       // ignore
     }
-  }, [current, playing])
+  }, [current, playing, displayName])
+
+  useEffect(() => {
+    const payload = current
+      ? { title: trackLabel(current), artist: current.artist || null }
+      : null
+    void window.qmusic.setNowPlaying?.(payload)
+  }, [current?.id, current?.artist, current?.title, current?.titleZh, current?.titleEn, current?.titleJa, displayName]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const audio = audioRef.current
@@ -592,6 +640,8 @@ export default function App() {
         importOpen ||
         themeOpen ||
         hotkeysOpen ||
+        behaviorOpen ||
+        rootsOpen ||
         trimOpen ||
         lyricsMatchOpen ||
         lyricsStyleOpen
@@ -599,11 +649,13 @@ export default function App() {
         return
       }
       for (const b of hotkeys) {
-        if (matchInAppBinding(e, b.inApp)) {
-          e.preventDefault()
-          onHotkeyAction(b.action)
-          return
-        }
+        const hitInApp = Boolean(b.inApp?.trim()) && matchGlobalAccelInApp(e, b.inApp)
+        const hitGlobal = Boolean(b.global?.trim()) && matchGlobalAccelInApp(e, b.global)
+        if (!hitInApp && !hitGlobal) continue
+        e.preventDefault()
+        // 一律走主进程（带防抖），避免与 globalShortcut 双触发把切换类操作抵消
+        void window.qmusic.dispatchHotkey?.(b.action)
+        return
       }
     }
     window.addEventListener('keydown', onKey)
@@ -616,6 +668,8 @@ export default function App() {
     importOpen,
     themeOpen,
     hotkeysOpen,
+    behaviorOpen,
+    rootsOpen,
     trimOpen,
     lyricsMatchOpen,
     lyricsStyleOpen,
@@ -634,11 +688,15 @@ export default function App() {
       setBgImageUrl(tp.bgImageUrl)
       applyTheme(merged, tp.bgImageUrl)
     })
+    const offName = window.qmusic.onDisplayNameChanged?.((name) => {
+      if (name) setDisplayName(name)
+    })
     const offHotkey = window.qmusic.onHotkeyAction?.((action) => {
       onHotkeyAction(action)
     })
     return () => {
       offTheme?.()
+      offName?.()
       offHotkey?.()
     }
   }, [onHotkeyAction])
@@ -986,6 +1044,7 @@ export default function App() {
       <TitleBar
         menuOpen={menuOpen}
         onToggleMenu={() => setMenuOpen((v) => !v)}
+        brandName={displayName}
         menu={
           <>
             <div className="menu-section">歌曲</div>
@@ -998,6 +1057,16 @@ export default function App() {
               }}
             >
               添加音乐目录
+            </button>
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                setMenuOpen(false)
+                setRootsOpen(true)
+              }}
+            >
+              目录绑定管理
             </button>
             <button
               type="button"
@@ -1116,15 +1185,7 @@ export default function App() {
                   : '关闭桌面歌词'}
             </button>
 
-            <div className="menu-section">音量</div>
-            <label className="menu-item check">
-              <input
-                type="checkbox"
-                checked={normalize}
-                onChange={(e) => setNormalize(e.target.checked)}
-              />
-              响度归一（总音量 + 每曲微调）
-            </label>
+            <div className="menu-section">响度</div>
             <button
               type="button"
               className="menu-item"
@@ -1134,7 +1195,7 @@ export default function App() {
                 void scanCurrentLoudness()
               }}
             >
-              扫描本曲响度
+              扫描当前曲响度
             </button>
             <button
               type="button"
@@ -1144,7 +1205,7 @@ export default function App() {
                 void scanAllLoudness()
               }}
             >
-              {scanningAll ? '中止批量响度扫描' : '批量扫描响度'}
+              {scanningAll ? '中止批量扫描' : '批量扫描响度'}
             </button>
 
             <div className="menu-section">应用</div>
@@ -1168,25 +1229,16 @@ export default function App() {
             >
               快捷键
             </button>
-            <label className="menu-item check" title="仅便携包生效；开发模式始终可多开">
-              <input
-                type="checkbox"
-                checked={allowMultiInstance}
-                onChange={(e) => {
-                  const next = e.target.checked
-                  setAllowMultiInstance(next)
-                  void window.qmusic.setAllowMultiInstance(next).then(() => {
-                    notify(
-                      'ok',
-                      next
-                        ? '已允许多开（下次新启动的进程可并存）'
-                        : '已恢复单开（下次启动时若已有实例将唤起原窗口）',
-                    )
-                  })
-                }}
-              />
-              允许同时运行多个实例
-            </label>
+            <button
+              type="button"
+              className="menu-item"
+              onClick={() => {
+                setMenuOpen(false)
+                setBehaviorOpen(true)
+              }}
+            >
+              应用行为设置
+            </button>
             <div className="menu-sep" />
             <div className="menu-hint">音乐根 {roots.length} · 曲目 {library.length}</div>
           </>
@@ -1357,7 +1409,7 @@ export default function App() {
                 title="打开歌曲页"
                 onClick={() => setSongPageOpen(true)}
               >
-                {current ? trackLabel(current) : 'Q-Music'}
+                {current ? trackLabel(current) : displayName}
               </button>
               <div className="now-sub">{statusText}</div>
             </div>
@@ -1508,8 +1560,26 @@ export default function App() {
       <HotkeysDrawer
         open={hotkeysOpen}
         value={hotkeys}
+        failedGlobals={failedGlobals}
         onChange={(next) => setHotkeys(mergeHotkeyBindings(next))}
         onClose={() => setHotkeysOpen(false)}
+      />
+      <BehaviorDrawer
+        open={behaviorOpen}
+        onClose={() => setBehaviorOpen(false)}
+        onNotify={notify}
+        onBehaviorChange={(b) => {
+          setLyricsTripleCycle(b.desktopLyricsTripleCycle !== false)
+        }}
+      />
+      <RootsDrawer
+        open={rootsOpen}
+        onClose={() => setRootsOpen(false)}
+        roots={roots}
+        lyricsRootAbs={lyricsRootAbs}
+        onNotify={notify}
+        onLibraryChange={(lib) => applyLibrary(lib as LibraryPayload)}
+        onLyricsRootChange={setLyricsRootAbs}
       />
 
       <ThemeDrawer

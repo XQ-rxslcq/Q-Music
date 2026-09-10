@@ -4,6 +4,7 @@ import { toRelativeIfUnderRoot } from '../core/app-paths'
 import { siblingLrcPath } from '../core/paths'
 import {
   absoluteTrackPath,
+  getPathAppRoot,
   lyricsPathInRoot,
   loadLyricsMap,
   loadRoots,
@@ -49,7 +50,7 @@ export async function saveLyricsForTrack(
     return { ok: false, error: e instanceof Error ? e.message : '写入歌词失败' }
   }
 
-  const lyricsRel = toRelativeIfUnderRoot(appRoot, lrcAbs)
+  const lyricsRel = toRelativeIfUnderRoot(getPathAppRoot(), lrcAbs)
   const map = loadLyricsMap(appRoot)
   map[trackId] = lyricsRel
   saveLyricsMap(appRoot, map)

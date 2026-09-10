@@ -63,29 +63,68 @@ export type QMusicApi = {
   windowDragEnd: () => void
   onChromeRefresh: (cb: () => void) => () => void
   onThemeChanged: (cb: (payload: ThemePayload) => void) => () => void
+  onDisplayNameChanged: (cb: (name: string) => void) => () => void
   getInitInfo: () => Promise<{
     appRoot: string
     dataDir: string
     firstRun: boolean
     packaged: boolean
+    displayName?: string
+    instanceSlot?: number
+    defaultDataDir?: string
     config?: {
       playMode?: PlayMode
       version?: number
       initializedAt?: string
       importTargetRootId?: string | null
       allowMultiInstance?: boolean
+      persistQueue?: boolean
+      desktopLyricsTripleCycle?: boolean
     }
   }>
+  setNowPlaying: (payload: { title?: string | null; artist?: string | null } | null) => Promise<string>
   getPlayMode: () => Promise<PlayMode>
   setPlayMode: (mode: PlayMode) => Promise<PlayMode>
   getAllowMultiInstance: () => Promise<boolean>
   setAllowMultiInstance: (allow: boolean) => Promise<{ allowMultiInstance: boolean }>
+  setBehavior: (patch: {
+    allowMultiInstance?: boolean
+    persistQueue?: boolean
+    desktopLyricsTripleCycle?: boolean
+  }) => Promise<{
+    allowMultiInstance: boolean
+    persistQueue: boolean
+    desktopLyricsTripleCycle: boolean
+    dataDir: string
+    defaultDataDir: string
+    appRoot: string
+  }>
+  getBehavior: () => Promise<{
+    allowMultiInstance: boolean
+    persistQueue: boolean
+    desktopLyricsTripleCycle: boolean
+    dataDir: string
+    defaultDataDir: string
+    appRoot: string
+  }>
+  pickDataDir: () => Promise<{ canceled: true } | { canceled: false; path: string }>
+  relocateDataDir: (
+    targetDir: string,
+  ) => Promise<{ ok: true; dataDir?: string } | { ok: false; error: string }>
+  getQueue: () => Promise<{ trackIds: string[]; currentId: string | null }>
+  setQueue: (state: {
+    trackIds: string[]
+    currentId: string | null
+  }) => Promise<{ trackIds: string[]; currentId: string | null }>
+  getFailedHotkeys: () => Promise<string[]>
   getTheme: () => Promise<ThemePayload>
   setTheme: (theme: ThemeSettings) => Promise<ThemePayload>
   pickBackground: () => Promise<ThemePayload>
   getLibrary: () => Promise<LibraryPayload>
   addMusicRoot: () => Promise<LibraryPayload>
   removeMusicRoot: (rootId: string) => Promise<LibraryPayload>
+  openMusicRoot: (rootId: string) => Promise<string>
+  openPath: (target: string) => Promise<string>
   rescanLibrary: () => Promise<LibraryPayload>
   updateTrack: (patch: Record<string, unknown> & { id: string }) => Promise<LibraryPayload>
   addCategory: (name: string) => Promise<LibraryPayload>
@@ -200,15 +239,18 @@ export type QMusicApi = {
         | 'seek-back'
         | 'seek-fwd'
         | 'toggle-desktop-lyrics'
-        | 'toggle-desktop-lyrics-lock',
+        | 'toggle-desktop-lyrics-lock'
+        | 'show-main',
     ) => void,
   ) => () => void
-  getHotkeys: () => Promise<
-    Array<{ action: string; global: string; inApp: string }>
-  >
+  getHotkeys: () => Promise<Array<{ action: string; global: string; inApp: string }>>
+  dispatchHotkey: (action: string) => Promise<boolean>
   setHotkeys: (
     bindings: Array<{ action: string; global: string; inApp: string }>,
-  ) => Promise<Array<{ action: string; global: string; inApp: string }>>
+  ) => Promise<{
+    bindings: Array<{ action: string; global: string; inApp: string }>
+    failedGlobals: string[]
+  }>
   ffmpegAvailable: () => Promise<boolean>
   trimExport: (payload: {
     inputPath: string

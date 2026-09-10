@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, shell } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
@@ -6,7 +6,17 @@ import { fileURLToPath } from 'node:url'
 import { parseFile } from 'music-metadata'
 import { fromMediaUrl, toMediaUrl } from '../core/media-url'
 import { detectFfmpeg, loadSiblingLyrics, readTextFileSmart, trimAudio } from './media-tools'
-import { bootstrapPortableApp, readConfig, writeConfig, type BootstrapResult } from './bootstrap'
+import {
+  bootstrapPortableApp,
+  peekSingleInstancePolicy,
+  readConfig,
+  readQueueState,
+  relocateQmdata,
+  writeConfig,
+  writeQueueState,
+  type BootstrapResult,
+} from './bootstrap'
+import { defaultQmdataDir, ensureQmdataSuffix } from '../core/app-paths'
 import {
   addMusicRoot,
   backgroundFileUrl,
@@ -21,6 +31,7 @@ import {
   loadTracks,
   removeMusicRoot,
   resolveLyricsRootAbsolute,
+  resolveRootAbsolute,
   saveCategories,
   saveGains,
   saveHotkeys,
@@ -53,19 +64,36 @@ import {
 } from './desktop-lyrics-window'
 import {
   applyHotkeyBindings,
-  bindMainWindowHotkeyLifecycle,
+  getFailedGlobalAccels,
+  refreshGlobalHotkeys,
   setHotkeyHandler,
+  setHotkeyRegistrationEnabled,
   unregisterAllHotkeys,
   type HotkeyAction,
 } from './hotkeys'
-import { createAppTray, destroyAppTray, refreshTrayMenu } from './tray'
-import { mergeDesktopLyrics } from '../core/desktop-lyrics'
+import { createAppTray, destroyAppTray, refreshTrayMenu, setTrayToolTip } from './tray'
+import {
+  resolveInstanceIdentity,
+  releaseInstanceSlot,
+  identityForSlot,
+  watchInstanceSlots,
+  type InstanceIdentity,
+} from './instance-slot'
+import { resolveShowMainHotkeyAction } from '../core/show-main'
+import { buildWindowTitleFromTrack } from '../core/window-title'
+import { evaluateHotkeyUsability, shouldAcceptHotkeyFire } from '../core/hotkey-config'
+import { mergeDesktopLyrics, nextDesktopLyricsCycle } from '../core/desktop-lyrics'
 import type { HotkeyBinding } from '../core/hotkey-config'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let mainWindow: BrowserWindow | null = null
 let isQuitting = false
+let instanceId: InstanceIdentity = {
+  slot: 1,
+  displayName: 'Q-Music',
+  appUserModelId: 'com.qmusic.app',
+}
 
 type AppWithQuitFlag = Electron.App & { isQuitting?: boolean }
 function setAppQuitting(v: boolean) {
@@ -73,18 +101,76 @@ function setAppQuitting(v: boolean) {
   ;(app as AppWithQuitFlag).isQuitting = v
 }
 
-// 尽早初始化：相对 exe/项目根拼接 data/，并把 userData 指过去（换路径拷贝即用）
+// 二次启动：先轻量读配置 + 抢锁，失败立刻退出（不做 bootstrap）
+const peek = peekSingleInstancePolicy(__dirname)
+const enforceSingleInstance = app.isPackaged && !peek.allowMultiInstance
+const multiInstance = !enforceSingleInstance
+// 多开：每个进程都是独立实例；单开：抢锁，失败则退出
+const isPrimaryInstance = multiInstance || app.requestSingleInstanceLock()
+if (!isPrimaryInstance) {
+  process.exit(0)
+}
+
+// 多开领取槽位；显示名仅在「同时存活 ≥ 2」时才变成 Q-Music (n)
+instanceId = resolveInstanceIdentity(multiInstance)
+let lastNowPlaying: { title?: string | null; artist?: string | null } | null = null
+let stopSlotWatch: (() => void) | null = null
+
+function applyInstanceIdentity(next: InstanceIdentity) {
+  const prev = instanceId.displayName
+  instanceId = next
+  try {
+    app.setName(next.displayName)
+    if (process.platform === 'win32') {
+      app.setAppUserModelId(next.appUserModelId)
+    }
+  } catch {
+    // ignore
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      if (process.platform === 'win32') {
+        mainWindow.setAppDetails({
+          appId: next.appUserModelId,
+          relaunchDisplayName: next.displayName,
+        })
+      }
+    } catch {
+      // ignore
+    }
+    const full = buildWindowTitleFromTrack(next.displayName, lastNowPlaying)
+    mainWindow.setTitle(full)
+    setTrayToolTip(full)
+    if (prev !== next.displayName) {
+      mainWindow.webContents.send('app:displayName', next.displayName)
+    }
+  }
+}
+
+function refreshInstanceLabel() {
+  if (!multiInstance) return
+  const next = identityForSlot(instanceId.slot, true, app.getPath('appData'))
+  if (
+    next.displayName === instanceId.displayName &&
+    next.appUserModelId === instanceId.appUserModelId
+  ) {
+    return
+  }
+  applyInstanceIdentity(next)
+}
+
+try {
+  app.setName(instanceId.displayName)
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(instanceId.appUserModelId)
+  }
+} catch {
+  // ignore
+}
+
 const boot: BootstrapResult = bootstrapPortableApp(__dirname)
 
-/**
- * 打包后默认单开：第二次启动唤起已有主窗（托盘隐藏则恢复），保留页面状态。
- * 若主窗已销毁则新建（相当于首页）。开发模式不限制。
- */
-const enforceSingleInstance = app.isPackaged && !boot.config.allowMultiInstance
-const isPrimaryInstance = !enforceSingleInstance || app.requestSingleInstanceLock()
-if (!isPrimaryInstance) {
-  app.exit(0)
-} else if (enforceSingleInstance) {
+if (enforceSingleInstance) {
   app.on('second-instance', () => {
     showOrCreateMainWindow()
   })
@@ -107,6 +193,164 @@ function showOrCreateMainWindow() {
   void syncDesktopLyricsWindow().catch(() => undefined)
 }
 
+/** 快捷键专用：已在最前则最小化，否则唤起 */
+function toggleMainWindowFromHotkey(opts?: { assumeFocused?: boolean }) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (app.isReady()) createWindow()
+    return
+  }
+  const focused =
+    Boolean(opts?.assumeFocused) ||
+    mainWindow.isFocused() ||
+    BrowserWindow.getFocusedWindow() === mainWindow
+  const action = resolveShowMainHotkeyAction({
+    exists: true,
+    visible: mainWindow.isVisible(),
+    minimized: mainWindow.isMinimized(),
+    focused,
+  })
+  log('hotkey:show-main', {
+    action,
+    focused,
+    assumeFocused: Boolean(opts?.assumeFocused),
+    visible: mainWindow.isVisible(),
+    minimized: mainWindow.isMinimized(),
+  })
+  if (action === 'minimize') {
+    mainWindow.minimize()
+    return
+  }
+  showOrCreateMainWindow()
+}
+
+const hotkeyFireAt = new Map<string, number>()
+
+function dispatchHotkeyAction(action: HotkeyAction, opts?: { assumeFocused?: boolean }) {
+  if (!shouldAcceptHotkeyFire(action, Date.now(), hotkeyFireAt, 220)) {
+    log('hotkey:debounce-skip', action)
+    return
+  }
+  log('hotkey:fire', action)
+  if (action === 'show-main') {
+    toggleMainWindowFromHotkey(opts)
+    return
+  }
+  if (action === 'toggle-desktop-lyrics') {
+    const theme = loadTheme(boot.dataDir)
+    const cfg = readConfig(boot.configPath)
+    const mode = cfg.desktopLyricsTripleCycle === false ? 'two' : 'three'
+    const step = nextDesktopLyricsCycle(theme.desktopLyrics, mode)
+    const next = {
+      ...theme,
+      desktopLyrics: mergeDesktopLyrics({
+        ...theme.desktopLyrics,
+        visible: step.visible,
+        locked: step.locked,
+      }),
+    }
+    saveTheme(boot.dataDir, next)
+    void syncDesktopLyricsWindow(next)
+    mainWindow?.webContents.send('theme:changed', buildThemePayload())
+    refreshTrayMenu()
+    return
+  }
+  if (action === 'toggle-desktop-lyrics-lock') {
+    const theme = loadTheme(boot.dataDir)
+    const next = {
+      ...theme,
+      desktopLyrics: mergeDesktopLyrics({
+        ...theme.desktopLyrics,
+        locked: !theme.desktopLyrics.locked,
+        visible: true,
+      }),
+    }
+    saveTheme(boot.dataDir, next)
+    void syncDesktopLyricsWindow(next)
+    mainWindow?.webContents.send('theme:changed', buildThemePayload())
+    refreshTrayMenu()
+    return
+  }
+  // 隐藏到托盘时窗口仍在，向渲染进程发播放控制
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('hotkey:action', action)
+  }
+}
+
+function setupTrayAndHotkeys() {
+  // 开发/多开时往往有多个 electron；仅槽位 1 注册全局键，避免互相 unregisterAll 抢键
+  const ownGlobals = !multiInstance || instanceId.slot === 1
+  setHotkeyRegistrationEnabled(ownGlobals)
+  setHotkeyHandler(dispatchHotkeyAction)
+  const bindings = loadHotkeys(boot.dataDir)
+  // 加载后写回规范化结果（如旧版 seek 键迁移）；数字键原样保留
+  try {
+    saveHotkeys(boot.dataDir, bindings)
+  } catch {
+    // ignore
+  }
+  const failed = applyHotkeyBindings(bindings)
+  const usability = evaluateHotkeyUsability(bindings, failed)
+  const doubtful = usability.filter((u) => u.doubtful)
+  log('hotkeys:registered', {
+    ownGlobals,
+    slot: instanceId.slot,
+    multiInstance,
+    failed,
+    bindings: bindings.map((b) => ({ action: b.action, global: b.global })),
+    usability: usability.map((u) => ({
+      action: u.action,
+      kind: u.kind,
+      usable: u.usable,
+      doubtful: u.doubtful,
+    })),
+  })
+  if (failed.length) log('hotkeys:register-failed', failed)
+  if (doubtful.length) {
+    log('hotkeys:digit-doubt', {
+      count: doubtful.length,
+      bindings: doubtful.map((u) => ({ action: u.action, global: u.accel })),
+      tip: 'digit shortcuts kept as-is; UI shows 按键存疑',
+    })
+  }
+
+  createAppTray({
+    appRoot: boot.appRoot,
+    mainDir: __dirname,
+    displayName: instanceId.displayName,
+    handlers: {
+      getMain: () => mainWindow,
+      getPlaying: () => false,
+      getDesktopLyricsVisible: () =>
+        Boolean(loadTheme(boot.dataDir).desktopLyrics.visible) || getDesktopLyricsVisible(),
+      getDesktopLyricsLocked: () => getDesktopLyricsLocked(),
+      sendAction: (action) => {
+        if (action === 'show-main') {
+          showOrCreateMainWindow()
+          return
+        }
+        if (action === 'quit-app') {
+          setAppQuitting(true)
+          destroyDesktopLyrics()
+          try {
+            const theme = loadTheme(boot.dataDir)
+            if (theme.desktopLyrics?.visible) {
+              saveTheme(boot.dataDir, {
+                ...theme,
+                desktopLyrics: mergeDesktopLyrics({ ...theme.desktopLyrics, visible: false }),
+              })
+            }
+          } catch {
+            // ignore
+          }
+          app.quit()
+          return
+        }
+        dispatchHotkeyAction(action)
+      },
+    },
+  })
+}
+
 function getPreloadAndDev() {
   return {
     preloadPath: resolvePreloadPath(),
@@ -115,7 +359,7 @@ function getPreloadAndDev() {
   }
 }
 
-async function syncDesktopLyricsWindow(theme = loadTheme(boot.appRoot)) {
+async function syncDesktopLyricsWindow(theme = loadTheme(boot.dataDir)) {
   const { preloadPath, mainDir, devUrl } = getPreloadAndDev()
   applyDesktopLyricsLayout(theme.desktopLyrics)
   await setDesktopLyricsVisible(Boolean(theme.desktopLyrics.visible), {
@@ -128,9 +372,9 @@ async function syncDesktopLyricsWindow(theme = loadTheme(boot.appRoot)) {
 }
 
 function buildThemePayload() {
-  const theme = loadTheme(boot.appRoot)
+  const theme = loadTheme(boot.dataDir)
   let bgImageUrl: string | null = null
-  const abs = backgroundFileUrl(boot.appRoot, theme.bgImageRel)
+  const abs = backgroundFileUrl(boot.dataDir, theme.bgImageRel)
   if (abs) bgImageUrl = toMediaUrl(abs)
   return { theme, bgImageUrl }
 }
@@ -249,7 +493,7 @@ function createWindow() {
     height: 720,
     minWidth: 800,
     minHeight: 560,
-    title: 'Q-Music',
+    title: instanceId.displayName,
     icon,
     frame: false,
     movable: true,
@@ -267,6 +511,16 @@ function createWindow() {
     },
   })
   mainWindow = win
+  if (process.platform === 'win32') {
+    try {
+      win.setAppDetails({
+        appId: instanceId.appUserModelId,
+        relaunchDisplayName: instanceId.displayName,
+      })
+    } catch {
+      // ignore
+    }
+  }
 
   const showFallback = setTimeout(() => {
     if (!win.isDestroyed() && !win.isVisible()) {
@@ -303,6 +557,8 @@ function createWindow() {
       win.hide()
       // × 藏到托盘：桌面歌词保持显示（最小化同理不打断）
       log('window:close → hide (tray)')
+      // 藏起后重新注册全局键，避免个别环境下失效
+      refreshGlobalHotkeys()
     }
   })
   win.on('closed', () => {
@@ -319,82 +575,6 @@ function createWindow() {
   win.on('show', () => {
     notifyChromeRefresh(win)
     void syncDesktopLyricsWindow().catch(() => undefined)
-  })
-  const initialHotkeys = loadHotkeys(boot.appRoot)
-  applyHotkeyBindings(initialHotkeys, !win.isFocused())
-
-  const dispatchHotkeyAction = (action: HotkeyAction) => {
-    if (action === 'toggle-desktop-lyrics') {
-      const theme = loadTheme(boot.appRoot)
-      const next = {
-        ...theme,
-        desktopLyrics: mergeDesktopLyrics({
-          ...theme.desktopLyrics,
-          visible: !theme.desktopLyrics.visible,
-        }),
-      }
-      saveTheme(boot.appRoot, next)
-      void syncDesktopLyricsWindow(next)
-      mainWindow?.webContents.send('theme:changed', buildThemePayload())
-      refreshTrayMenu()
-      return
-    }
-    if (action === 'toggle-desktop-lyrics-lock') {
-      const theme = loadTheme(boot.appRoot)
-      const next = {
-        ...theme,
-        desktopLyrics: mergeDesktopLyrics({
-          ...theme.desktopLyrics,
-          locked: !theme.desktopLyrics.locked,
-        }),
-      }
-      saveTheme(boot.appRoot, next)
-      void syncDesktopLyricsWindow(next)
-      mainWindow?.webContents.send('theme:changed', buildThemePayload())
-      refreshTrayMenu()
-      return
-    }
-    mainWindow?.webContents.send('hotkey:action', action)
-  }
-
-  bindMainWindowHotkeyLifecycle(() => mainWindow)
-  setHotkeyHandler(dispatchHotkeyAction)
-
-  createAppTray({
-    appRoot: boot.appRoot,
-    mainDir: __dirname,
-    handlers: {
-      getMain: () => mainWindow,
-      getPlaying: () => false,
-      getDesktopLyricsVisible: () =>
-        Boolean(loadTheme(boot.appRoot).desktopLyrics.visible) || getDesktopLyricsVisible(),
-      getDesktopLyricsLocked: () => getDesktopLyricsLocked(),
-      sendAction: (action) => {
-        if (action === 'show-main') {
-          showOrCreateMainWindow()
-          return
-        }
-        if (action === 'quit-app') {
-          setAppQuitting(true)
-          destroyDesktopLyrics()
-          // 真正退出时关掉「下次启动还弹歌词」的残留偏好
-          try {
-            const theme = loadTheme(boot.appRoot)
-            if (theme.desktopLyrics?.visible) {
-              saveTheme(boot.appRoot, {
-                ...theme,
-                desktopLyrics: mergeDesktopLyrics({ ...theme.desktopLyrics, visible: false }),
-              })
-            }
-          } catch {
-            // ignore
-          }
-          app.quit()
-          return
-        }
-        dispatchHotkeyAction(action)
-      },
-    },
   })
 
   const devUrl = process.env.VITE_DEV_SERVER_URL
@@ -582,16 +762,6 @@ log('boot-early', {
   viteUrl: process.env.VITE_DEV_SERVER_URL || null,
 })
 
-// 规范对外显示名（音频共享 / 任务栏等优先读这个，而不是 package name 里的 q-music）
-try {
-  app.setName('Q-Music')
-  if (process.platform === 'win32') {
-    app.setAppUserModelId('com.qmusic.app')
-  }
-} catch {
-  // ignore
-}
-
 if (isPrimaryInstance) {
 app.whenReady().then(() => {
   log('app:ready', {
@@ -603,13 +773,34 @@ app.whenReady().then(() => {
   })
   Menu.setApplicationMenu(null)
 
+  if (multiInstance) {
+    stopSlotWatch?.()
+    stopSlotWatch = watchInstanceSlots(app.getPath('appData'), () => refreshInstanceLabel())
+    refreshInstanceLabel()
+  }
+
   ipcMain.handle('app:getInitInfo', () => ({
     appRoot: boot.appRoot,
     dataDir: boot.dataDir,
     firstRun: boot.firstRun,
     packaged: app.isPackaged,
     config: boot.config,
+    defaultDataDir: defaultQmdataDir(boot.appRoot),
+    displayName: instanceId.displayName,
+    instanceSlot: instanceId.slot,
   }))
+
+  /** 同步窗口标题 / 托盘悬停：`Q-Music - 艺人 - 歌名`（规范见 core/window-title） */
+  ipcMain.handle(
+    'app:setNowPlaying',
+    (_e, payload: { title?: string | null; artist?: string | null } | null) => {
+      lastNowPlaying = payload
+      const full = buildWindowTitleFromTrack(instanceId.displayName, payload)
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitle(full)
+      setTrayToolTip(full)
+      return full
+    },
+  )
 
   const PLAY_MODES = new Set(['sequence', 'loop', 'single', 'shuffle'])
   ipcMain.handle('player:getPlayMode', () => {
@@ -627,14 +818,14 @@ app.whenReady().then(() => {
   const themePayload = () => buildThemePayload()
 
   const libraryPayload = () => {
-    const roots = loadRoots(boot.appRoot)
-    const tracks = loadTracks(boot.appRoot)
-    const categories = loadCategories(boot.appRoot)
-    const gains = loadGains(boot.appRoot)
-    const lyricsRoot = loadLyricsRoot(boot.appRoot)
-    const lyricsRootAbs = resolveLyricsRootAbsolute(boot.appRoot)
+    const roots = loadRoots(boot.dataDir)
+    const tracks = loadTracks(boot.dataDir)
+    const categories = loadCategories(boot.dataDir)
+    const gains = loadGains(boot.dataDir)
+    const lyricsRoot = loadLyricsRoot(boot.dataDir)
+    const lyricsRootAbs = resolveLyricsRootAbsolute(boot.dataDir)
     const playable = tracks
-      .map((t) => trackToPlayable(boot.appRoot, t, roots, toMediaUrl))
+      .map((t) => trackToPlayable(boot.dataDir, t, roots, toMediaUrl))
       .filter(Boolean)
     return { roots, tracks, categories, playable, gains, lyricsRoot, lyricsRootAbs }
   }
@@ -649,7 +840,7 @@ app.whenReady().then(() => {
             desktopLyrics: mergeDesktopLyrics({ ...theme.desktopLyrics, bounds: live }),
           }
         : theme
-    saveTheme(boot.appRoot, next)
+    saveTheme(boot.dataDir, next)
     void syncDesktopLyricsWindow(next).catch((err) => log('desktop-lyrics theme sync', err))
     return themePayload()
   })
@@ -660,9 +851,9 @@ app.whenReady().then(() => {
       filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
     })
     if (result.canceled || !result.filePaths[0]) return themePayload()
-    const rel = importBackgroundImage(boot.appRoot, result.filePaths[0])
-    const theme = { ...loadTheme(boot.appRoot), bgStyle: 'image' as const, bgImageRel: rel }
-    saveTheme(boot.appRoot, theme)
+    const rel = importBackgroundImage(boot.dataDir, result.filePaths[0])
+    const theme = { ...loadTheme(boot.dataDir), bgStyle: 'image' as const, bgImageRel: rel }
+    saveTheme(boot.dataDir, theme)
     return themePayload()
   })
 
@@ -674,51 +865,63 @@ app.whenReady().then(() => {
       properties: ['openDirectory', 'multiSelections'],
     })
     if (!result.canceled) {
-      for (const p of result.filePaths) addMusicRoot(boot.appRoot, p)
-      await rescanAllRoots(boot.appRoot)
+      for (const p of result.filePaths) addMusicRoot(boot.dataDir, p)
+      await rescanAllRoots(boot.dataDir)
     }
     return libraryPayload()
   })
   ipcMain.handle('library:removeRoot', async (_e, rootId: string) => {
-    removeMusicRoot(boot.appRoot, rootId)
+    removeMusicRoot(boot.dataDir, rootId)
     return libraryPayload()
   })
+  ipcMain.handle('library:openRoot', async (_e, rootId: string) => {
+    const root = loadRoots(boot.dataDir).find((r) => r.id === rootId)
+    if (!root) return '目录不存在'
+    const abs = resolveRootAbsolute(boot.dataDir, root)
+    if (!fs.existsSync(abs)) return '路径不存在'
+    return shell.openPath(abs)
+  })
+  ipcMain.handle('shell:openPath', async (_e, target: string) => {
+    const abs = path.resolve(String(target || ''))
+    if (!abs || !fs.existsSync(abs)) return '路径不存在'
+    return shell.openPath(abs)
+  })
   ipcMain.handle('library:rescan', async () => {
-    await rescanAllRoots(boot.appRoot)
+    await rescanAllRoots(boot.dataDir)
     return libraryPayload()
   })
   ipcMain.handle('library:updateTrack', (_e, patch: Partial<TrackRecord> & { id: string }) => {
-    const tracks = loadTracks(boot.appRoot)
+    const tracks = loadTracks(boot.dataDir)
     const i = tracks.findIndex((t) => t.id === patch.id)
     if (i >= 0) {
       tracks[i] = { ...tracks[i], ...patch }
-      saveTracks(boot.appRoot, tracks)
+      saveTracks(boot.dataDir, tracks)
       if (patch.lyricsRel != null) {
-        const map = loadLyricsMap(boot.appRoot)
+        const map = loadLyricsMap(boot.dataDir)
         if (patch.lyricsRel) map[patch.id] = patch.lyricsRel
         else delete map[patch.id]
-        saveLyricsMap(boot.appRoot, map)
+        saveLyricsMap(boot.dataDir, map)
       }
     }
     return libraryPayload()
   })
   ipcMain.handle('library:setCategories', (_e, cats: Category[]) => {
-    saveCategories(boot.appRoot, cats)
+    saveCategories(boot.dataDir, cats)
     return libraryPayload()
   })
   ipcMain.handle('library:addCategory', (_e, name: string) => {
-    const cats = loadCategories(boot.appRoot)
+    const cats = loadCategories(boot.dataDir)
     const id = `cat-${Date.now()}`
     cats.push({ id, name })
-    saveCategories(boot.appRoot, cats)
+    saveCategories(boot.dataDir, cats)
     return libraryPayload()
   })
   ipcMain.handle('library:applyFilenameMeta', () => {
-    const result = applyFilenameMetaVerified(boot.appRoot)
+    const result = applyFilenameMetaVerified(boot.dataDir)
     return { ...libraryPayload(), ...result }
   })
   ipcMain.handle('library:applyFilenameMetaForce', () => {
-    const result = applyFilenameMetaToAll(boot.appRoot)
+    const result = applyFilenameMetaToAll(boot.dataDir)
     return { ...libraryPayload(), ...result }
   })
   ipcMain.handle(
@@ -734,14 +937,14 @@ app.whenReady().then(() => {
         titleJa: string
       },
     ) => {
-      const res = await importAudioFile(boot.appRoot, payload)
+      const res = await importAudioFile(boot.dataDir, payload)
       if (!res.ok) return { ok: false as const, error: res.error, library: libraryPayload() }
       return { ok: true as const, trackId: res.track.id, library: libraryPayload() }
     },
   )
   ipcMain.handle('config:getImportTarget', () => {
     const cfg = readConfig(boot.configPath)
-    const roots = loadRoots(boot.appRoot)
+    const roots = loadRoots(boot.dataDir)
     const id = cfg.importTargetRootId || roots[0]?.id || null
     return { importTargetRootId: id, roots }
   })
@@ -758,6 +961,99 @@ app.whenReady().then(() => {
     boot.config = next
     return { allowMultiInstance: Boolean(next.allowMultiInstance) }
   })
+  ipcMain.handle('config:getPersistQueue', () => {
+    const cfg = readConfig(boot.configPath)
+    return cfg.persistQueue !== false
+  })
+  ipcMain.handle('config:setPersistQueue', (_e, persist: boolean) => {
+    const next = { ...readConfig(boot.configPath), persistQueue: Boolean(persist) }
+    writeConfig(boot.configPath, next)
+    boot.config = next
+    return { persistQueue: next.persistQueue !== false }
+  })
+  ipcMain.handle('config:getBehavior', () => {
+    const cfg = readConfig(boot.configPath)
+    return {
+      allowMultiInstance: Boolean(cfg.allowMultiInstance),
+      persistQueue: cfg.persistQueue !== false,
+      desktopLyricsTripleCycle: cfg.desktopLyricsTripleCycle !== false,
+      dataDir: boot.dataDir,
+      defaultDataDir: defaultQmdataDir(boot.appRoot),
+      appRoot: boot.appRoot,
+    }
+  })
+  ipcMain.handle(
+    'config:setBehavior',
+    (
+      _e,
+      patch: {
+        allowMultiInstance?: boolean
+        persistQueue?: boolean
+        desktopLyricsTripleCycle?: boolean
+      },
+    ) => {
+    const cur = readConfig(boot.configPath)
+    const next = {
+      ...cur,
+      ...(patch.allowMultiInstance != null ? { allowMultiInstance: Boolean(patch.allowMultiInstance) } : {}),
+      ...(patch.persistQueue != null ? { persistQueue: Boolean(patch.persistQueue) } : {}),
+      ...(patch.desktopLyricsTripleCycle != null
+        ? { desktopLyricsTripleCycle: Boolean(patch.desktopLyricsTripleCycle) }
+        : {}),
+    }
+    writeConfig(boot.configPath, next)
+    boot.config = next
+    return {
+      allowMultiInstance: Boolean(next.allowMultiInstance),
+      persistQueue: next.persistQueue !== false,
+      desktopLyricsTripleCycle: next.desktopLyricsTripleCycle !== false,
+      dataDir: boot.dataDir,
+      defaultDataDir: defaultQmdataDir(boot.appRoot),
+      appRoot: boot.appRoot,
+    }
+  },
+  )
+  ipcMain.handle('config:pickDataDir', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择数据存放位置（将自动使用其下的 qmdata 文件夹）',
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: path.dirname(boot.dataDir),
+    })
+    if (result.canceled || !result.filePaths[0]) return { canceled: true as const }
+    return { canceled: false as const, path: ensureQmdataSuffix(result.filePaths[0]) }
+  })
+  ipcMain.handle('config:relocateDataDir', async (_e, targetDir: string) => {
+    const dest = ensureQmdataSuffix(targetDir)
+    if (!dest) return { ok: false as const, error: '路径为空' }
+    const res = relocateQmdata(boot.appRoot, boot.dataDir, dest)
+    if (!res.ok) return res
+    // 移动成功后重启
+    app.relaunch()
+    setAppQuitting(true)
+    app.exit(0)
+    return { ok: true as const, dataDir: dest }
+  })
+  ipcMain.handle('queue:get', () => {
+    const cfg = readConfig(boot.configPath)
+    if (cfg.persistQueue === false) return { trackIds: [], currentId: null }
+    return readQueueState(boot.dataDir)
+  })
+  ipcMain.handle(
+    'queue:set',
+    (_e, state: { trackIds?: string[]; currentId?: string | null }) => {
+      const cfg = readConfig(boot.configPath)
+      if (cfg.persistQueue === false) {
+        writeQueueState(boot.dataDir, { trackIds: [], currentId: null })
+        return { trackIds: [], currentId: null }
+      }
+      const next = {
+        trackIds: Array.isArray(state?.trackIds) ? state.trackIds.filter((x) => typeof x === 'string') : [],
+        currentId: typeof state?.currentId === 'string' ? state.currentId : null,
+      }
+      writeQueueState(boot.dataDir, next)
+      return next
+    },
+  )
   ipcMain.handle('config:setImportTarget', (_e, rootId: string | null) => {
     const next = { ...readConfig(boot.configPath), importTargetRootId: rootId || null }
     writeConfig(boot.configPath, next)
@@ -776,15 +1072,15 @@ app.whenReady().then(() => {
         titleJa: string
       },
     ) => {
-      const res = await renameTrackFile(boot.appRoot, payload.id, payload)
+      const res = await renameTrackFile(boot.dataDir, payload.id, payload)
       if (!res.ok) return { ok: false as const, error: res.error, library: libraryPayload() }
       return { ok: true as const, oldId: res.oldId, trackId: res.track.id, library: libraryPayload() }
     },
   )
-  ipcMain.handle('library:getGains', () => loadGains(boot.appRoot))
+  ipcMain.handle('library:getGains', () => loadGains(boot.dataDir))
   ipcMain.handle('library:setGains', (_e, gains: Record<string, number>) => {
-    saveGains(boot.appRoot, gains)
-    return loadGains(boot.appRoot)
+    saveGains(boot.dataDir, gains)
+    return loadGains(boot.dataDir)
   })
   ipcMain.handle('lyrics:bindToTrack', async (_e, trackId: string) => {
     const result = await dialog.showOpenDialog({
@@ -794,35 +1090,35 @@ app.whenReady().then(() => {
     })
     if (result.canceled || !result.filePaths[0]) return null
     const rel = toRelativeIfUnderRoot(boot.appRoot, result.filePaths[0])
-    const map = loadLyricsMap(boot.appRoot)
+    const map = loadLyricsMap(boot.dataDir)
     map[trackId] = rel
-    saveLyricsMap(boot.appRoot, map)
-    const tracks = loadTracks(boot.appRoot)
+    saveLyricsMap(boot.dataDir, map)
+    const tracks = loadTracks(boot.dataDir)
     const i = tracks.findIndex((t) => t.id === trackId)
     if (i >= 0) {
       tracks[i] = { ...tracks[i], lyricsRel: rel }
-      saveTracks(boot.appRoot, tracks)
+      saveTracks(boot.dataDir, tracks)
     }
     const content = await readTextFileSmart(result.filePaths[0])
     return { path: result.filePaths[0], content, lyricsRel: rel, library: libraryPayload() }
   })
   ipcMain.handle('lyrics:loadForTrack', async (_e, trackId: string) => {
-    const found = await resolveLyricsFileForTrack(boot.appRoot, trackId)
+    const found = await resolveLyricsFileForTrack(boot.dataDir, trackId)
     if (!found.path) return { path: null, content: null }
     try {
       const content = await readTextFileSmart(found.path)
       // 若靠歌词根/旁路找到但 map 未记，写回映射方便下次
       if (found.via && found.via !== 'map') {
-        const map = loadLyricsMap(boot.appRoot)
+        const map = loadLyricsMap(boot.dataDir)
         const rel = toRelativeIfUnderRoot(boot.appRoot, found.path)
         if (map[trackId] !== rel) {
           map[trackId] = rel
-          saveLyricsMap(boot.appRoot, map)
-          const tracks = loadTracks(boot.appRoot)
+          saveLyricsMap(boot.dataDir, map)
+          const tracks = loadTracks(boot.dataDir)
           const i = tracks.findIndex((t) => t.id === trackId)
           if (i >= 0) {
             tracks[i] = { ...tracks[i], lyricsRel: rel }
-            saveTracks(boot.appRoot, tracks)
+            saveTracks(boot.dataDir, tracks)
           }
         }
       }
@@ -833,38 +1129,38 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('lyrics:getRoot', () => {
-    const settings = loadLyricsRoot(boot.appRoot)
+    const settings = loadLyricsRoot(boot.dataDir)
     return {
       path: settings.path,
-      absPath: resolveLyricsRootAbsolute(boot.appRoot),
+      absPath: resolveLyricsRootAbsolute(boot.dataDir),
     }
   })
 
   ipcMain.handle('lyrics:pickRoot', async () => {
     const result = await dialog.showOpenDialog({
       title: '选择歌词目录（保存/读取 .lrc，按音频同名匹配）',
-      defaultPath: resolveLyricsRootAbsolute(boot.appRoot) || defaultMusicDir(),
+      defaultPath: resolveLyricsRootAbsolute(boot.dataDir) || defaultMusicDir(),
       properties: ['openDirectory'],
     })
     if (result.canceled || !result.filePaths[0]) {
       return {
-        path: loadLyricsRoot(boot.appRoot).path,
-        absPath: resolveLyricsRootAbsolute(boot.appRoot),
+        path: loadLyricsRoot(boot.dataDir).path,
+        absPath: resolveLyricsRootAbsolute(boot.dataDir),
         library: libraryPayload(),
       }
     }
     const stored = toRelativeIfUnderRoot(boot.appRoot, result.filePaths[0])
-    saveLyricsRoot(boot.appRoot, { path: stored })
-    await rescanAllRoots(boot.appRoot)
+    saveLyricsRoot(boot.dataDir, { path: stored })
+    await rescanAllRoots(boot.dataDir)
     return {
       path: stored,
-      absPath: resolveLyricsRootAbsolute(boot.appRoot),
+      absPath: resolveLyricsRootAbsolute(boot.dataDir),
       library: libraryPayload(),
     }
   })
 
   ipcMain.handle('lyrics:clearRoot', async () => {
-    saveLyricsRoot(boot.appRoot, { path: null })
+    saveLyricsRoot(boot.dataDir, { path: null })
     return {
       path: null,
       absPath: null,
@@ -910,7 +1206,7 @@ app.whenReady().then(() => {
     if (!trackId || typeof content !== 'string' || !content.trim()) {
       return { ok: false as const, error: '缺少曲目或歌词内容' }
     }
-    const res = await saveLyricsForTrack(boot.appRoot, trackId, content)
+    const res = await saveLyricsForTrack(boot.dataDir, trackId, content)
     if (!res.ok) return res
     return { ...res, library: libraryPayload() }
   })
@@ -974,12 +1270,12 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('desktop-lyrics:setVisible', async (_e, visible: boolean) => {
-    const theme = loadTheme(boot.appRoot)
+    const theme = loadTheme(boot.dataDir)
     const next = {
       ...theme,
       desktopLyrics: { ...theme.desktopLyrics, visible: Boolean(visible) },
     }
-    saveTheme(boot.appRoot, next)
+    saveTheme(boot.dataDir, next)
     await syncDesktopLyricsWindow(next)
     mainWindow?.webContents.send('theme:changed', themePayload())
     return { visible: Boolean(visible) }
@@ -1002,22 +1298,27 @@ app.whenReady().then(() => {
     },
   )
 
-  ipcMain.handle('hotkeys:get', () => loadHotkeys(boot.appRoot))
-  ipcMain.handle('hotkeys:set', (_e, bindings: HotkeyBinding[]) => {
-    saveHotkeys(boot.appRoot, bindings)
-    const next = loadHotkeys(boot.appRoot)
-    const focused = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused())
-    applyHotkeyBindings(next, !focused)
-    return next
+  ipcMain.handle('hotkeys:get', () => loadHotkeys(boot.dataDir))
+  ipcMain.handle('hotkeys:dispatch', (_e, action: string) => {
+    // 渲染进程按键 = 用户正在窗内操作，显示键应视为已在前台
+    dispatchHotkeyAction(action as HotkeyAction, { assumeFocused: true })
+    return true
   })
+  ipcMain.handle('hotkeys:set', (_e, bindings: HotkeyBinding[]) => {
+    saveHotkeys(boot.dataDir, bindings)
+    const next = loadHotkeys(boot.dataDir)
+    applyHotkeyBindings(next)
+    return { bindings: next, failedGlobals: getFailedGlobalAccels() }
+  })
+  ipcMain.handle('hotkeys:failedGlobals', () => getFailedGlobalAccels())
 
   setDesktopLyricsBoundsListener((bounds) => {
-    const theme = loadTheme(boot.appRoot)
+    const theme = loadTheme(boot.dataDir)
     const next = {
       ...theme,
       desktopLyrics: mergeDesktopLyrics({ ...theme.desktopLyrics, bounds }),
     }
-    saveTheme(boot.appRoot, next)
+    saveTheme(boot.dataDir, next)
     // 同步到渲染进程，避免锁定时用旧 bounds 覆盖刚调好的尺寸
     mainWindow?.webContents.send('theme:changed', buildThemePayload())
   })
@@ -1045,6 +1346,7 @@ app.whenReady().then(() => {
   )
 
   try {
+    setupTrayAndHotkeys()
     createWindow()
   } catch (err) {
     log('createWindow threw', err instanceof Error ? err : String(err))
@@ -1072,9 +1374,9 @@ app.on('before-quit', () => {
   setAppQuitting(true)
   destroyDesktopLyrics()
   try {
-    const theme = loadTheme(boot.appRoot)
+    const theme = loadTheme(boot.dataDir)
     if (theme.desktopLyrics?.visible) {
-      saveTheme(boot.appRoot, {
+      saveTheme(boot.dataDir, {
         ...theme,
         desktopLyrics: mergeDesktopLyrics({ ...theme.desktopLyrics, visible: false }),
       })
@@ -1088,5 +1390,14 @@ app.on('will-quit', () => {
   unregisterAllHotkeys()
   destroyDesktopLyrics()
   destroyAppTray()
+  try {
+    stopSlotWatch?.()
+  } catch {
+    // ignore
+  }
+  stopSlotWatch = null
+  if (multiInstance) {
+    releaseInstanceSlot(app.getPath('appData'), instanceId.slot)
+  }
 })
 } // isPrimaryInstance

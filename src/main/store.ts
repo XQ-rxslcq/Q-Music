@@ -24,6 +24,21 @@ import {
 import { fromRelativeToRoot, toRelativeIfUnderRoot } from '../core/app-paths'
 import { DEFAULT_HOTKEY_BINDINGS, mergeHotkeyBindings, type HotkeyBinding } from '../core/hotkey-config'
 
+/** exe/项目根：音乐根、歌词等相对路径基准 */
+let pathAppRoot = ''
+
+export function setPathAppRoot(appRoot: string) {
+  pathAppRoot = appRoot
+}
+
+export function getPathAppRoot() {
+  return pathAppRoot || process.cwd()
+}
+
+function musicBase() {
+  return getPathAppRoot()
+}
+
 function readJson<T>(file: string, fallback: T): T {
   try {
     if (!fs.existsSync(file)) return fallback
@@ -48,25 +63,26 @@ function writeJson(file: string, data: unknown) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8')
 }
 
-export function ensureLibraryLayout(appRoot: string) {
-  for (const d of libraryDataDirs(appRoot)) {
+/** 参数均为 qmdata 根目录 */
+export function ensureLibraryLayout(dataDir: string) {
+  for (const d of libraryDataDirs(dataDir)) {
     fs.mkdirSync(d, { recursive: true })
   }
-  const roots = resolveRootsPath(appRoot)
-  const tracks = resolveTracksPath(appRoot)
-  const lyrics = resolveLyricsMapPath(appRoot)
-  const lyricsRoot = resolveLyricsRootPath(appRoot)
-  const cats = resolveCategoriesPath(appRoot)
-  const theme = resolveThemePath(appRoot)
+  const roots = resolveRootsPath(dataDir)
+  const tracks = resolveTracksPath(dataDir)
+  const lyrics = resolveLyricsMapPath(dataDir)
+  const lyricsRoot = resolveLyricsRootPath(dataDir)
+  const cats = resolveCategoriesPath(dataDir)
+  const theme = resolveThemePath(dataDir)
   if (!fs.existsSync(roots)) writeJson(roots, [])
   if (!fs.existsSync(tracks)) writeJson(tracks, [])
   if (!fs.existsSync(lyrics)) writeJson(lyrics, {})
   if (!fs.existsSync(lyricsRoot)) writeJson(lyricsRoot, { path: null })
   if (!fs.existsSync(cats)) writeJson(cats, [])
   if (!fs.existsSync(theme)) writeJson(theme, DEFAULT_THEME)
-  const gains = resolveGainsPath(appRoot)
+  const gains = resolveGainsPath(dataDir)
   if (!fs.existsSync(gains)) writeJson(gains, {})
-  const hotkeys = resolveHotkeysPath(appRoot)
+  const hotkeys = resolveHotkeysPath(dataDir)
   if (!fs.existsSync(hotkeys)) writeJson(hotkeys, { bindings: DEFAULT_HOTKEY_BINDINGS })
 }
 
@@ -145,10 +161,10 @@ export function saveLyricsRoot(appRoot: string, settings: LyricsRootSettings) {
 }
 
 /** 歌词根绝对路径；未设置返回 null */
-export function resolveLyricsRootAbsolute(appRoot: string): string | null {
-  const { path: p } = loadLyricsRoot(appRoot)
+export function resolveLyricsRootAbsolute(dataDir: string): string | null {
+  const { path: p } = loadLyricsRoot(dataDir)
   if (!p) return null
-  return fromRelativeToRoot(appRoot, p)
+  return fromRelativeToRoot(musicBase(), p)
 }
 
 /** 在歌词根目录下按音频主文件名定位 .lrc */
@@ -166,13 +182,14 @@ export function saveCategories(appRoot: string, cats: Category[]) {
 }
 
 export function addMusicRoot(
-  appRoot: string,
+  dataDir: string,
   absPath: string,
   label?: string,
 ): MusicRoot[] {
-  const roots = loadRoots(appRoot)
-  const stored = toRelativeIfUnderRoot(appRoot, path.resolve(absPath))
-  if (roots.some((r) => path.resolve(fromRelativeToRoot(appRoot, r.path)) === path.resolve(absPath))) {
+  const roots = loadRoots(dataDir)
+  const base = musicBase()
+  const stored = toRelativeIfUnderRoot(base, path.resolve(absPath))
+  if (roots.some((r) => path.resolve(fromRelativeToRoot(base, r.path)) === path.resolve(absPath))) {
     return roots
   }
   roots.push({
@@ -181,46 +198,49 @@ export function addMusicRoot(
     label: label || path.basename(absPath) || 'Music',
     addedAt: new Date().toISOString(),
   })
-  saveRoots(appRoot, roots)
+  saveRoots(dataDir, roots)
   return roots
 }
 
-export function removeMusicRoot(appRoot: string, rootId: string): MusicRoot[] {
-  const roots = loadRoots(appRoot).filter((r) => r.id !== rootId)
-  saveRoots(appRoot, roots)
-  const tracks = loadTracks(appRoot).filter((t) => t.rootId !== rootId)
-  saveTracks(appRoot, tracks)
+export function removeMusicRoot(dataDir: string, rootId: string): MusicRoot[] {
+  const roots = loadRoots(dataDir).filter((r) => r.id !== rootId)
+  saveRoots(dataDir, roots)
+  const tracks = loadTracks(dataDir).filter((t) => t.rootId !== rootId)
+  saveTracks(dataDir, tracks)
   return roots
 }
 
-export function resolveRootAbsolute(appRoot: string, root: MusicRoot): string {
-  return fromRelativeToRoot(appRoot, root.path)
+export function resolveRootAbsolute(_dataDir: string, root: MusicRoot): string {
+  return fromRelativeToRoot(musicBase(), root.path)
 }
 
-export function absoluteTrackPath(appRoot: string, root: MusicRoot, track: TrackRecord): string {
-  return path.join(resolveRootAbsolute(appRoot, root), track.pathRel)
+export function absoluteTrackPath(dataDir: string, root: MusicRoot, track: TrackRecord): string {
+  return path.join(resolveRootAbsolute(dataDir, root), track.pathRel)
 }
 
-export function resolveLyricsAbsolute(appRoot: string, lyricsRel: string | null): string | null {
+export function resolveLyricsAbsolute(_dataDir: string, lyricsRel: string | null): string | null {
   if (!lyricsRel) return null
-  return fromRelativeToRoot(appRoot, lyricsRel)
+  return fromRelativeToRoot(musicBase(), lyricsRel)
 }
 
-/** 复制背景图到 data/backgrounds，返回相对 appRoot 的路径 */
-export function importBackgroundImage(appRoot: string, sourceAbs: string): string {
-  const dir = resolveBackgroundsDir(appRoot)
+/** 复制背景图到 qmdata/backgrounds，返回相对 qmdata 的路径 */
+export function importBackgroundImage(dataDir: string, sourceAbs: string): string {
+  const dir = resolveBackgroundsDir(dataDir)
   fs.mkdirSync(dir, { recursive: true })
   const ext = path.extname(sourceAbs) || '.jpg'
   const name = `bg-${Date.now()}${ext}`
   const dest = path.join(dir, name)
   fs.copyFileSync(sourceAbs, dest)
-  return toRelativeIfUnderRoot(appRoot, dest)
+  return toRelativeIfUnderRoot(dataDir, dest)
 }
 
-export function backgroundFileUrl(appRoot: string, bgImageRel: string | null): string | null {
+export function backgroundFileUrl(dataDir: string, bgImageRel: string | null): string | null {
   if (!bgImageRel) return null
-  const abs = fromRelativeToRoot(appRoot, bgImageRel)
+  let abs = fromRelativeToRoot(dataDir, bgImageRel)
+  if (!fs.existsSync(abs)) {
+    // 旧版相对程序根 / data/ 的路径
+    abs = fromRelativeToRoot(musicBase(), bgImageRel)
+  }
   if (!fs.existsSync(abs)) return null
-  // 用自定义协议由主进程提供更稳；此处返回绝对路径供主进程转 qmusic url
   return abs
 }

@@ -11,6 +11,7 @@ import { toRelativeIfUnderRoot } from '../core/app-paths'
 import { siblingLrcPath } from '../core/paths'
 import {
   absoluteTrackPath,
+  getPathAppRoot,
   loadGains,
   loadLyricsMap,
   loadRoots,
@@ -90,7 +91,7 @@ async function fileToRecord(
   for (const lrc of candidates) {
     try {
       await fs.access(lrc)
-      lyricsRel = toRelativeIfUnderRoot(appRoot, lrc)
+      lyricsRel = toRelativeIfUnderRoot(getPathAppRoot(), lrc)
       break
     } catch {
       /* try next */
@@ -274,7 +275,7 @@ export async function renameTrackFile(
   if (lyricsMap[track.id]) {
     const oldRel = lyricsMap[track.id]
     delete lyricsMap[track.id]
-    const maybeNewLrc = toRelativeIfUnderRoot(appRoot, absNew.replace(/\.[^.]+$/, '.lrc'))
+    const maybeNewLrc = toRelativeIfUnderRoot(getPathAppRoot(), absNew.replace(/\.[^.]+$/, '.lrc'))
     lyricsMap[newId] = oldRel.endsWith('.lrc') ? maybeNewLrc : oldRel
   }
   if (gains[track.id] != null) {
