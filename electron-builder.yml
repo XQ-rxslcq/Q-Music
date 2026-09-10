@@ -1,0 +1,31 @@
+# electron-builder 配置（便携 Windows 应用）
+# 用户：双击 exe；整目录可拷到任意路径
+# 输出目录由 scripts/dist-win.ps1 设为 dist/<version>/
+
+appId: com.qmusic.app
+productName: Q-Music
+copyright: Q-Music
+directories:
+  output: dist/1.2.1
+  buildResources: build
+files:
+  - dist-renderer/**/*
+  - dist-electron/**/*
+  - package.json
+  - assets/icon.png
+asar: true
+win:
+  icon: build/icon.ico
+  executableName: Q-Music
+  target:
+    - target: portable
+      arch:
+        - x64
+  artifactName: Q-Music-${version}-portable.${ext}
+portable:
+  requestExecutionLevel: user
+extraMetadata:
+  main: dist-electron/main.js
+  name: Q-Music
+  productName: Q-Music
+  description: Q-Music portable player

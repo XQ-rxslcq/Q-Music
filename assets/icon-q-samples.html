@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Q-Music 图标 · Comfortaa（已定稿）</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --icon-bg: #2a9fd4;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+        background: #0f1418;
+        color: #e8eef2;
+        padding: 28px 24px 48px;
+      }
+      h1 {
+        font-weight: 600;
+        font-size: 1.25rem;
+        margin: 0 0 8px;
+      }
+      .lead {
+        margin: 0 0 28px;
+        opacity: 0.72;
+        font-size: 0.95rem;
+        max-width: 52rem;
+        line-height: 1.5;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        align-items: flex-start;
+      }
+      .card {
+        background: #1a2228;
+        border-radius: 14px;
+        padding: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.06);
+      }
+      .card h2 {
+        margin: 0 0 10px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        opacity: 0.85;
+      }
+      .tile {
+        width: 200px;
+        aspect-ratio: 1;
+        border-radius: 18%;
+        background: var(--icon-bg);
+        display: grid;
+        place-items: center;
+        color: #fff;
+        user-select: none;
+      }
+      .q {
+        font-family: Comfortaa, sans-serif;
+        font-weight: 700;
+        font-size: 5rem;
+        line-height: 1;
+        transform: translateY(-2%);
+      }
+      .note {
+        margin-top: 28px;
+        font-size: 0.85rem;
+        opacity: 0.65;
+        max-width: 40rem;
+        line-height: 1.5;
+      }
+      code {
+        font-size: 0.9em;
+        background: rgba(255, 255, 255, 0.08);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+      }
+      img.preview {
+        width: 200px;
+        height: 200px;
+        border-radius: 18%;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Q-Music 图标定稿 · F Comfortaa · 偏蓝青底</h1>
+    <p class="lead">
+      已采用 <strong>Comfortaa Bold</strong> 白字 Q，背景 <code>#2a9fd4</code>（相对初版青绿
+      <code>#2bbbad</code> 更偏蓝）。正式资源：<code>assets/icon.png</code>、<code>build/icon.ico</code>。
+    </p>
+    <div class="row">
+      <div class="card">
+        <h2>CSS 预览（Comfortaa）</h2>
+        <div class="tile"><span class="q">Q</span></div>
+      </div>
+      <div class="card">
+        <h2>已生成 PNG（icon-512）</h2>
+        <img class="preview" src="./icon-512.png" alt="Q-Music icon" />
+      </div>
+    </div>
+    <p class="note">
+      重新生成：<code>python scripts/gen-app-icon.py</code>（需本机 Pillow +
+      <code>assets/fonts/Comfortaa-Variable.ttf</code>）。electron-builder 使用
+      <code>build/icon.ico</code>。
+    </p>
+  </body>
+</html>
