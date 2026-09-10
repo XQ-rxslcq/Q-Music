@@ -1,0 +1,35 @@
+# 忽略构建产物、本地数据与内部文档（公开仓库不收录）
+
+# 依赖与构建
+node_modules/
+dist/
+dist-renderer/
+dist-electron/
+release/
+*.log
+
+# 运行时 / 隐私
+data/
+logs/
+scratch/
+*.local
+.env
+.env.*
+
+# 内部设计文档（仅本机维护）
+docs/
+
+# 本地探针与临时脚本
+scratch-*.txt
+scratch-*.json
+lm-return.tsx.txt
+migrate-drawers.mjs
+splice-lm.mjs
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.iml
