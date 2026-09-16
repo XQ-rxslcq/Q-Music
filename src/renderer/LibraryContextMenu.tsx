@@ -15,7 +15,8 @@ type Props = {
   x: number
   y: number
   track: Track
-  source?: 'library' | 'queue'
+  /** now-playing：状态栏当前曲，不含播放/入队 */
+  source?: 'library' | 'queue' | 'now-playing'
   onAction: (action: CtxAction, track: Track) => void
   onClose: () => void
 }
@@ -77,20 +78,24 @@ export default function LibraryContextMenu({
           </>
         ) : (
           <>
-            <li className="ctx-group" aria-hidden>
-              播放
-            </li>
-            <li>
-              <button type="button" onClick={() => onAction('play', track)}>
-                播放 / 加入队列
-              </button>
-            </li>
-            <li>
-              <button type="button" onClick={() => onAction('addQueue', track)}>
-                仅加入队列
-              </button>
-            </li>
-            <li className="ctx-sep" aria-hidden />
+            {source !== 'now-playing' && (
+              <>
+                <li className="ctx-group" aria-hidden>
+                  播放
+                </li>
+                <li>
+                  <button type="button" onClick={() => onAction('play', track)}>
+                    播放 / 加入队列
+                  </button>
+                </li>
+                <li>
+                  <button type="button" onClick={() => onAction('addQueue', track)}>
+                    仅加入队列
+                  </button>
+                </li>
+                <li className="ctx-sep" aria-hidden />
+              </>
+            )}
             <li className="ctx-group" aria-hidden>
               配置
             </li>

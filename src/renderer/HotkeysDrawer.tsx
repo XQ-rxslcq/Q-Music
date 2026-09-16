@@ -4,6 +4,7 @@ import {
   HOTKEY_ACTION_LABELS,
   accelToKeycaps,
   evaluateHotkeyUsability,
+  keyTokenFromKeyboardEvent,
   listImeHostileBindings,
   mergeHotkeyBindings,
   type HotkeyAction,
@@ -108,17 +109,14 @@ export default function HotkeysDrawer({ open, value, failedGlobals = [], onChang
             if (e.ctrlKey || e.metaKey) parts.push('CommandOrControl')
             if (e.altKey) parts.push('Alt')
             if (e.shiftKey) parts.push('Shift')
-            let key = e.key
-            if (key === ' ') key = 'Space'
-            else if (key.startsWith('Arrow')) key = key.replace('Arrow', '')
-            else if (key.length === 1) key = key.toUpperCase()
-            if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return
+            const key = keyTokenFromKeyboardEvent(e)
+            if (!key) return
             parts.push(key)
             patch(recording, parts.join('+'))
             setRecording(null)
           }}
         >
-          正在录制「{HOTKEY_ACTION_LABELS[recording]}」…（Esc 取消；原样保存，数字键仅提示存疑）
+          正在录制「{HOTKEY_ACTION_LABELS[recording]}」…（Esc 取消；小键盘请用 Num 键，将存为 num0–num9）
         </div>
       )}
       <div className="panel-tools" style={{ marginTop: 12 }}>

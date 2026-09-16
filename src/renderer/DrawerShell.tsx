@@ -83,8 +83,53 @@ export default function DrawerShell({
           <h2>{title}</h2>
           <div className="theme-head-actions">
             {headExtra}
-            <button type="button" className="icon" onClick={requestClose} aria-label="关闭">
-              ×
+            <button
+              type="button"
+              className="icon theme-win-btn"
+              title="最小化"
+              aria-label="最小化"
+              onClick={() => void window.qmusic?.windowMinimize?.()}
+            >
+              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden>
+                <path d="M2 6.25h8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="icon theme-win-btn"
+              title="最大化 / 还原"
+              aria-label="最大化"
+              onClick={() => void window.qmusic?.windowToggleMaximize?.()}
+            >
+              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden>
+                <rect
+                  x="1.75"
+                  y="1.75"
+                  width="8.5"
+                  height="8.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  rx="0.4"
+                />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="icon theme-win-btn"
+              onClick={requestClose}
+              aria-label="关闭"
+              title="关闭"
+            >
+              <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden>
+                <path
+                  d="M3 3l6 6M9 3L3 9"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
             </button>
           </div>
         </div>

@@ -10,6 +10,8 @@ import RootsDrawer from './RootsDrawer'
 import ImportDrawer, { type ImportDraft } from './ImportDrawer'
 import LyricsMatchDrawer from './LyricsMatchDrawer'
 import LibraryContextMenu, { type CtxAction } from './LibraryContextMenu'
+import LyricsContextMenu, { type LyricsCtxAction } from './LyricsContextMenu'
+import ClickHud, { type ClickHudState } from './ClickHud'
 import SongPage from './SongPage'
 import PlaylistPicker from './PlaylistPicker'
 import HotkeysDrawer from './HotkeysDrawer'
@@ -20,6 +22,8 @@ import { resolveLyricLines, type LyricLine } from '../core/lyrics'
 import { DEFAULT_THEME, mergeDesktopLyrics, mergePageLyrics } from '../core/library-model'
 import { nextDesktopLyricsCycle } from '../core/desktop-lyrics'
 import { resolvePrimaryTitle } from '../core/title-display'
+import { createPlaybackHold } from '../core/playback-hold'
+import { VOLUME_HOTKEY_STEP } from '../core/volume'
 import TrackTitleCell from './TrackTitleCell'
 import {
   DEFAULT_HOTKEY_BINDINGS,
@@ -127,13 +131,32 @@ export default function App() {
   const [dropActive, setDropActive] = useState(false)
   const [lyricsMatchOpen, setLyricsMatchOpen] = useState(false)
   const [lyricsMatchTrackId, setLyricsMatchTrackId] = useState<string | null>(null)
+  const [lyricsMatchEditExisting, setLyricsMatchEditExisting] = useState(false)
+  const [lyricsCtx, setLyricsCtx] = useState<{ x: number; y: number } | null>(null)
+  const [clickHud, setClickHud] = useState<ClickHudState | null>(null)
+  const libraryListRef = useRef<HTMLUListElement | null>(null)
+  const libraryPanelRef = useRef<HTMLElement | null>(null)
+  const bannerHoverRef = useRef(false)
+  const volPointerRef = useRef<{ x: number; y: number } | null>(null)
+  const playingRef = useRef(false)
+  const playbackHoldRef = useRef(
+    createPlaybackHold({
+      getPlaying: () => playingRef.current,
+      pause: () => setPlaying(false),
+      resume: () => setPlaying(true),
+    }),
+  )
+
+  useEffect(() => {
+    playingRef.current = playing
+  }, [playing])
   const [lyricsRootAbs, setLyricsRootAbs] = useState<string | null>(null)
   const [lyricsTripleCycle, setLyricsTripleCycle] = useState(true)
   const [ctx, setCtx] = useState<{
     x: number
     y: number
     track: Track
-    source: 'library' | 'queue'
+    source: 'library' | 'queue' | 'now-playing'
     queueIndex?: number
   } | null>(null)
   const [lyrics, setLyrics] = useState<LyricLine[]>([])
@@ -153,6 +176,20 @@ export default function App() {
   }
 
   const notify = (kind: 'info' | 'ok' | 'error', text: string) => setToast({ kind, text })
+
+  // 有焦点时累计 5s 自动关横幅；鼠标在横幅上则暂停计时
+  useEffect(() => {
+    const visible = Boolean(initHint || error || toast)
+    if (!visible) return
+    let focusedMs = 0
+    const id = window.setInterval(() => {
+      if (bannerHoverRef.current) return
+      if (typeof document.hasFocus === 'function' && !document.hasFocus()) return
+      focusedMs += 200
+      if (focusedMs >= 5000) dismissToast()
+    }, 200)
+    return () => window.clearInterval(id)
+  }, [initHint, error, toast])
 
   const applyLibrary = (payload: LibraryPayload) => {
     setRoots(payload.roots)
@@ -486,36 +523,76 @@ export default function App() {
     goRelative(-1)
   }, [goRelative])
 
-  const cycleDesktopLyrics = useCallback(() => {
-    setTheme((t) => {
-      const dl = t.desktopLyrics
-      const step = nextDesktopLyricsCycle(
-        { visible: Boolean(dl?.visible), locked: dl?.locked !== false },
-        lyricsTripleCycle ? 'three' : 'two',
-      )
-      setToast({ kind: 'ok', text: step.toast })
-      return {
-        ...t,
-        desktopLyrics: mergeDesktopLyrics({
-          ...(dl || {}),
-          visible: step.visible,
-          locked: step.locked,
-        }),
-      }
-    })
-  }, [lyricsTripleCycle])
+  const showClickHud = (x: number, y: number, text: string) => {
+    setClickHud({ id: Date.now(), x, y, text })
+  }
+
+  const MODE_LABEL: Record<PlayMode, string> = {
+    sequence: '顺序播放',
+    loop: '列表循环',
+    single: '单曲循环',
+    shuffle: '随机播放',
+  }
+
+  const cycleDesktopLyrics = useCallback(
+    (at?: { x: number; y: number }) => {
+      setTheme((t) => {
+        const dl = t.desktopLyrics
+        const step = nextDesktopLyricsCycle(
+          { visible: Boolean(dl?.visible), locked: dl?.locked !== false },
+          lyricsTripleCycle ? 'three' : 'two',
+        )
+        if (at) showClickHud(at.x, at.y, step.toast)
+        else setToast({ kind: 'ok', text: step.toast })
+        return {
+          ...t,
+          desktopLyrics: mergeDesktopLyrics({
+            ...(dl || {}),
+            visible: step.visible,
+            locked: step.locked,
+          }),
+        }
+      })
+    },
+    [lyricsTripleCycle],
+  )
 
   const toggleDesktopLyrics = useCallback(() => {
     cycleDesktopLyrics()
   }, [cycleDesktopLyrics])
 
   const toggleDesktopLyricsLock = useCallback(() => {
+    setTheme((t) => {
+      const nextLocked = !t.desktopLyrics?.locked
+      return {
+        ...t,
+        desktopLyrics: mergeDesktopLyrics({
+          ...(t.desktopLyrics || {}),
+          locked: nextLocked,
+          visible: true,
+        }),
+      }
+    })
+  }, [])
+
+  const setDesktopVisible = useCallback((visible: boolean) => {
     setTheme((t) => ({
       ...t,
       desktopLyrics: mergeDesktopLyrics({
         ...(t.desktopLyrics || {}),
-        locked: !t.desktopLyrics?.locked,
-        visible: true,
+        visible,
+      }),
+    }))
+  }, [])
+
+  const setDesktopLocked = useCallback((locked: boolean) => {
+    setTheme((t) => ({
+      ...t,
+      desktopLyrics: mergeDesktopLyrics({
+        ...(t.desktopLyrics || {}),
+        locked,
+        // 锁定/解锁时保持可见性不变；若当前隐藏仍只改 locked 状态
+        visible: t.desktopLyrics?.visible,
       }),
     }))
   }, [])
@@ -525,9 +602,19 @@ export default function App() {
       if (action === 'toggle-play') setPlaying((p) => !p)
       else if (action === 'next') goNext()
       else if (action === 'prev') goPrev()
-      else if (action === 'vol-up') setVolume((v) => Math.min(1, v + 0.05))
-      else if (action === 'vol-down') setVolume((v) => Math.max(0, v - 0.05))
-      else if (action === 'seek-back' || action === 'seek-fwd') {
+      else if (action === 'vol-up') {
+        setVolume((v) => {
+          const next = Math.min(1, v + VOLUME_HOTKEY_STEP)
+          showClickHud(window.innerWidth / 2, window.innerHeight - 96, `音量 ${Math.round(next * 100)}%`)
+          return next
+        })
+      } else if (action === 'vol-down') {
+        setVolume((v) => {
+          const next = Math.max(0, v - VOLUME_HOTKEY_STEP)
+          showClickHud(window.innerWidth / 2, window.innerHeight - 96, `音量 ${Math.round(next * 100)}%`)
+          return next
+        })
+      } else if (action === 'seek-back' || action === 'seek-fwd') {
         const a = audioRef.current
         if (!a) return
         const delta = action === 'seek-fwd' ? 5 : -5
@@ -714,12 +801,13 @@ export default function App() {
     })
   }, [lyrics, currentTime, duration, current, theme.desktopLyrics, playing])
 
-  const cycleMode = () => {
+  const cycleMode = (at?: { x: number; y: number }) => {
     const order: PlayMode[] = ['sequence', 'loop', 'single', 'shuffle']
     const next = order[(order.indexOf(mode) + 1) % order.length]
     setMode(next)
     if (next === 'shuffle') setShuffleOrder(shuffleIndices(queue.length, index))
     void window.qmusic.setPlayMode?.(next)
+    if (at) showClickHud(at.x, at.y, MODE_LABEL[next])
   }
 
   const playLibraryTrack = (track: Track) => {
@@ -972,6 +1060,12 @@ export default function App() {
     setRenameOpen(true)
   }
 
+  const openLyricsMatch = (trackId: string | null, editExisting = false) => {
+    setLyricsMatchEditExisting(editExisting)
+    setLyricsMatchTrackId(trackId)
+    setLyricsMatchOpen(true)
+  }
+
   const onCtxAction = (action: CtxAction, track: Track) => {
     const queueIndex = ctx?.source === 'queue' ? ctx.queueIndex : undefined
     setCtx(null)
@@ -983,9 +1077,62 @@ export default function App() {
     else if (action === 'rename') openRenameTrack(track)
     else if (action === 'lyrics') void pickLyrics(track.id)
     else if (action === 'matchLyrics') {
-      setLyricsMatchTrackId(track.id)
-      setLyricsMatchOpen(true)
+      openLyricsMatch(track.id, false)
     }
+  }
+
+  const onLyricsCtxAction = (action: LyricsCtxAction) => {
+    const at = lyricsCtx ? { x: lyricsCtx.x, y: lyricsCtx.y } : null
+    setLyricsCtx(null)
+    const track = current
+    if (action === 'toggleDesktopVisible') {
+      const next = !theme.desktopLyrics?.visible
+      setDesktopVisible(next)
+      if (at) showClickHud(at.x, at.y, next ? '歌词显示：开' : '歌词显示：关')
+    } else if (action === 'toggleDesktopLock') {
+      const next = !theme.desktopLyrics?.locked
+      setDesktopLocked(next)
+      if (at) showClickHud(at.x, at.y, next ? '歌词锁定：开' : '歌词锁定：关')
+    } else if (action === 'matchLyrics') {
+      openLyricsMatch(track?.id || null, false)
+    } else if (action === 'editExistingLyrics') {
+      openLyricsMatch(track?.id || null, true)
+    } else if (action === 'pickLyricsFile') {
+      if (track) void pickLyrics(track.id)
+      else notify('info', '请先播放一首歌')
+    } else if (action === 'lyricsStyle') {
+      setLyricsStyleOpen(true)
+    }
+  }
+
+  const locatePlayingInLibrary = () => {
+    if (!current) {
+      notify('info', '当前没有正在播放的歌曲')
+      return
+    }
+    const list = libraryListRef.current
+    if (!list) return
+    if (!filteredLibrary.some((t) => t.id === current.id)) {
+      notify('info', '当前曲不在此列表筛选中，已尝试定位')
+    }
+    const safeId = current.id.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const el = list.querySelector(`[data-track-id="${safeId}"]`) as HTMLElement | null
+    if (!el) {
+      notify('info', '列表中未找到当前曲目')
+      return
+    }
+    const listRect = list.getBoundingClientRect()
+    const elRect = el.getBoundingClientRect()
+    const delta =
+      elRect.top + elRect.height / 2 - (listRect.top + listRect.height / 2)
+    list.scrollTop += delta
+    el.classList.add('locate-flash')
+    const li = el.closest('li')
+    li?.classList.add('locate-flash')
+    window.setTimeout(() => {
+      el.classList.remove('locate-flash')
+      li?.classList.remove('locate-flash')
+    }, 1200)
   }
 
   const onSaveTrack = async (patch: {
@@ -1164,8 +1311,7 @@ export default function App() {
               className="menu-item"
               onClick={() => {
                 setMenuOpen(false)
-                setLyricsMatchTrackId(current?.id || null)
-                setLyricsMatchOpen(true)
+                openLyricsMatch(current?.id || null, false)
               }}
             >
               歌词匹配工作台
@@ -1253,6 +1399,12 @@ export default function App() {
             className={`banner dismissible ${
               error || toast?.kind === 'error' ? 'error' : toast?.kind === 'ok' ? 'ok' : 'info'
             }`}
+            onMouseEnter={() => {
+              bannerHoverRef.current = true
+            }}
+            onMouseLeave={() => {
+              bannerHoverRef.current = false
+            }}
           >
             <span className="banner-text">
               {[initHint, error, toast?.text].filter(Boolean).join(' · ')}
@@ -1262,9 +1414,9 @@ export default function App() {
             </button>
           </div>
         )}
-
         <main className={`layout-main ${queueOpen ? 'with-queue' : ''}`}>
           <section
+            ref={libraryPanelRef}
             className={`panel library-panel ${dropActive ? 'drop-active' : ''}`}
             onDragEnter={onLibraryDragOver}
             onDragOver={onLibraryDragOver}
@@ -1320,37 +1472,59 @@ export default function App() {
               </div>
             </div>
 
-            <ul className="list">
-              {filteredLibrary.map((t) => (
-                <li key={t.id}>
-                  <button
-                    type="button"
-                    className="row"
-                    onClick={() => playLibraryTrack(t)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      setCtx({ x: e.clientX, y: e.clientY, track: t, source: 'library' })
-                    }}
-                  >
-                    <span
-                      className={`lyric-flag ${hasLyrics(t) ? 'on' : 'off'}`}
-                      title={hasLyrics(t) ? '已绑定歌词' : '无歌词'}
+            <div className="library-list-wrap">
+              <ul className="list" ref={libraryListRef}>
+                {filteredLibrary.map((t) => (
+                  <li key={t.id} className={current?.id === t.id ? 'playing-row' : ''}>
+                    <button
+                      type="button"
+                      className="row"
+                      data-track-id={t.id}
+                      onClick={() => playLibraryTrack(t)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setCtx({ x: e.clientX, y: e.clientY, track: t, source: 'library' })
+                      }}
                     >
-                      {hasLyrics(t) ? '词' : '·'}
-                    </span>
-                    <TrackTitleCell track={t} />
-                    <span className="meta">{t.artist}</span>
-                  </button>
-                </li>
-              ))}
-              {!filteredLibrary.length && (
-                <li className="empty">
-                  {libraryQuery.trim()
-                    ? '没有匹配的歌曲'
-                    : '用菜单「添加音乐目录」登记文件夹，或把音频拖入此面板导入'}
-                </li>
-              )}
-            </ul>
+                      <span
+                        className={`lyric-flag ${hasLyrics(t) ? 'on' : 'off'}`}
+                        title={hasLyrics(t) ? '已绑定歌词' : '无歌词'}
+                      >
+                        {hasLyrics(t) ? '词' : '·'}
+                      </span>
+                      <TrackTitleCell track={t} />
+                      <span className="meta">{t.artist}</span>
+                    </button>
+                  </li>
+                ))}
+                {!filteredLibrary.length && (
+                  <li className="empty">
+                    {libraryQuery.trim()
+                      ? '没有匹配的歌曲'
+                      : '用菜单「添加音乐目录」登记文件夹，或把音频拖入此面板导入'}
+                  </li>
+                )}
+              </ul>
+              <button
+                type="button"
+                className="locate-fab"
+                title="定位到正在播放"
+                aria-label="定位到正在播放"
+                disabled={!current}
+                onClick={locatePlayingInLibrary}
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+                  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                  <path
+                    d="M12 3v3.2M12 17.8V21M3 12h3.2M17.8 12H21"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
           </section>
 
           {queueOpen && (
@@ -1406,12 +1580,26 @@ export default function App() {
               <button
                 type="button"
                 className="now-title now-title-btn"
-                title="打开歌曲页"
+                title="打开歌曲页 · 右键打开曲目菜单"
                 onClick={() => setSongPageOpen(true)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  if (!current) return
+                  setCtx({ x: e.clientX, y: e.clientY, track: current, source: 'now-playing' })
+                }}
               >
                 {current ? trackLabel(current) : displayName}
               </button>
-              <div className="now-sub">{statusText}</div>
+              <div
+                className="now-sub"
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  if (!current) return
+                  setCtx({ x: e.clientX, y: e.clientY, track: current, source: 'now-playing' })
+                }}
+              >
+                {statusText}
+              </div>
             </div>
             <div className="controls">
               <TransportButtons
@@ -1421,7 +1609,7 @@ export default function App() {
                 onToggle={() => setPlaying((p) => !p)}
                 onNext={goNext}
                 mode={mode}
-                onCycleMode={cycleMode}
+                onCycleMode={(e) => cycleMode({ x: e.clientX, y: e.clientY })}
                 lyricsState={
                   !theme.desktopLyrics?.visible
                     ? 'off'
@@ -1429,7 +1617,10 @@ export default function App() {
                       ? 'unlocked'
                       : 'locked'
                 }
-                onCycleLyrics={() => cycleDesktopLyrics()}
+                onCycleLyrics={(e) => cycleDesktopLyrics({ x: e.clientX, y: e.clientY })}
+                onLyricsContextMenu={(e) => {
+                  setLyricsCtx({ x: e.clientX, y: e.clientY })
+                }}
               />
             </div>
             <div className="vol vol-stack">
@@ -1443,7 +1634,18 @@ export default function App() {
                   step={0.01}
                   value={volume}
                   style={{ '--range-progress': `${volume * 100}%` } as CSSProperties}
-                  onChange={(e) => setVolume(Number(e.target.value))}
+                  onPointerDown={(e) => {
+                    volPointerRef.current = { x: e.clientX, y: e.clientY }
+                  }}
+                  onPointerMove={(e) => {
+                    if (e.buttons) volPointerRef.current = { x: e.clientX, y: e.clientY }
+                  }}
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    setVolume(v)
+                    const at = volPointerRef.current
+                    if (at) showClickHud(at.x, at.y, `音量 ${Math.round(v * 100)}%`)
+                  }}
                 />
               </div>
               <label className="norm gain-line">
@@ -1503,8 +1705,10 @@ export default function App() {
         }}
         onSeekEndNext={() => goNext()}
         onOpenMatch={() => {
-          setLyricsMatchTrackId(current?.id || null)
-          setLyricsMatchOpen(true)
+          openLyricsMatch(current?.id || null, false)
+        }}
+        onLyricsContextMenu={(e) => {
+          setLyricsCtx({ x: e.clientX, y: e.clientY })
         }}
       />
 
@@ -1640,10 +1844,17 @@ export default function App() {
         open={lyricsMatchOpen}
         tracks={library}
         initialTrackId={lyricsMatchTrackId}
+        initialEditExisting={lyricsMatchEditExisting}
         lyricsRootAbs={lyricsRootAbs}
         onClose={() => {
           setLyricsMatchOpen(false)
           setLyricsMatchTrackId(null)
+          setLyricsMatchEditExisting(false)
+          playbackHoldRef.current.release('lyrics-preview')
+        }}
+        onPreviewPlayingChange={(previewPlaying) => {
+          if (previewPlaying) playbackHoldRef.current.acquire('lyrics-preview')
+          else playbackHoldRef.current.release('lyrics-preview')
         }}
         onLyricsRootChange={(lib, abs) => {
           applyLibrary(lib)
@@ -1670,6 +1881,18 @@ export default function App() {
           onClose={() => setCtx(null)}
         />
       )}
+      {lyricsCtx && (
+        <LyricsContextMenu
+          x={lyricsCtx.x}
+          y={lyricsCtx.y}
+          hasExistingLyrics={Boolean(current && hasLyrics(current))}
+          desktopVisible={Boolean(theme.desktopLyrics?.visible)}
+          desktopLocked={theme.desktopLyrics?.locked !== false}
+          onAction={onLyricsCtxAction}
+          onClose={() => setLyricsCtx(null)}
+        />
+      )}
+      <ClickHud hud={clickHud} onDone={() => setClickHud(null)} />
     </div>
   )
 }

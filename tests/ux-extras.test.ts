@@ -23,6 +23,13 @@ describe('karaokeLineProgress', () => {
     expect(karaokeLineProgress(lines, 0, 15)).toBeCloseTo(0.5, 5)
     expect(karaokeLineProgress(lines, 0, 20)).toBe(1)
   })
+
+  it('pins last line at 100% after its stamp until song ends', () => {
+    const lines = [{ timeMs: 10000 }, { timeMs: 20000 }]
+    expect(karaokeLineProgress(lines, 1, 20, 90)).toBe(1)
+    expect(karaokeLineProgress(lines, 1, 45, 90)).toBe(1)
+    expect(karaokeLineProgress(lines, 1, 19.5, 90)).toBe(0)
+  })
 })
 
 describe('mergeDesktopLyrics', () => {

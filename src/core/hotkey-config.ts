@@ -130,6 +130,21 @@ const TOKEN_LABELS: Record<string, string> = {
   arrowright: '→',
   plus: '+',
   minus: '−',
+  num0: 'Num0',
+  num1: 'Num1',
+  num2: 'Num2',
+  num3: 'Num3',
+  num4: 'Num4',
+  num5: 'Num5',
+  num6: 'Num6',
+  num7: 'Num7',
+  num8: 'Num8',
+  num9: 'Num9',
+  numdec: 'Num.',
+  numadd: 'Num+',
+  numsub: 'Num−',
+  nummult: 'Num*',
+  numdiv: 'Num/',
 }
 
 /** 拆成按键块文案，如 Ctrl / Alt / Space */
@@ -172,6 +187,8 @@ function classifyDigitAccelRisk(accel: string): 'bare-ctrl-digit' | 'digit-combo
     .filter(Boolean)
   if (parts.length < 2) return null
   const key = parts[parts.length - 1]
+  // 小键盘 numN 不走 IME 选词，不算存疑
+  if (/^num\d$/.test(key)) return null
   if (!/^[0-9]$/.test(key)) return null
   const mods = parts.slice(0, -1)
   const known = new Set([
@@ -201,6 +218,22 @@ function classifyDigitAccelRisk(accel: string): 'bare-ctrl-digit' | 'digit-combo
   if (mods.length === 1) return 'bare-ctrl-digit'
   return 'digit-combo'
 }
+
+/** 从键盘事件解析 Electron accelerator 主键（区分顶行数字与小键盘） */
+export function keyTokenFromKeyboardEvent(e: KeyboardEvent): string | null {
+  if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return null
+  if (e.code?.startsWith('Numpad') && /\d$/.test(e.code)) {
+    return `num${e.code.slice('Numpad'.length)}`
+  }
+  if (e.key === ' ') return 'Space'
+  if (e.key.startsWith('Arrow')) return e.key.replace('Arrow', '')
+  if (e.code?.startsWith('Digit')) return e.code.slice(5)
+  if (/^Key[A-Z]$/i.test(e.code || '')) return e.code!.slice(3).toUpperCase()
+  if (e.key.length === 1) return e.key.toUpperCase()
+  if (e.key === 'Escape' || e.key === 'Enter' || e.key === 'Tab') return e.key
+  return e.code || e.key
+}
+
 
 /** @deprecated 不再改写录入；保留导出以免旧调用报错 */
 export function upgradeImeHostileAccel(accel: string): string {
@@ -320,15 +353,8 @@ export function matchInAppBinding(e: KeyboardEvent, accel: string): boolean {
 export function matchGlobalAccelInApp(e: KeyboardEvent, accel: string): boolean {
   if (!accel.trim()) return false
   const want = accelToKeycaps(accel).map((x) => x.toLowerCase())
-  const keyToken = (() => {
-    if (e.key === ' ') return 'Space'
-    if (e.key.startsWith('Arrow')) return e.key.replace('Arrow', '')
-    if (e.key.length === 1) return e.key.toUpperCase()
-    if (e.code?.startsWith('Digit')) return e.code.slice(5)
-    if (e.code?.startsWith('Numpad') && /\d/.test(e.code)) return e.code.replace('Numpad', '')
-    if (/^Key[A-Z]$/i.test(e.code || '')) return e.code!.slice(3).toUpperCase()
-    return e.key
-  })()
+  const keyToken = keyTokenFromKeyboardEvent(e)
+  if (!keyToken) return false
   const got = accelToKeycaps(
     [
       e.ctrlKey || e.metaKey ? 'Ctrl' : '',
@@ -340,7 +366,14 @@ export function matchGlobalAccelInApp(e: KeyboardEvent, accel: string): boolean 
       .join('+'),
   ).map((x) => x.toLowerCase())
   if (want.length !== got.length) return false
-  return want.every((w, i) => w === got[i])
+  // Num7 与 7 在 keycaps 后分别为 num7/7 → 小写比较；顶行与小键盘用变体在注册侧已兼顾
+  if (want.every((w, i) => w === got[i])) return true
+  // 录成顶行数字时，小键盘按下也应命中（与 accelVariants 对称）
+  const wantKey = want[want.length - 1]
+  const gotKey = got[got.length - 1]
+  const norm = (k: string) => (k.startsWith('num') && k.length === 4 ? k.slice(3) : k)
+  if (want.slice(0, -1).every((w, i) => w === got[i]) && norm(wantKey) === norm(gotKey)) return true
+  return false
 }
 
 /** 动作防抖：焦点时 globalShortcut 与窗内 keydown 常各触发一次，切换类会被抵消 */

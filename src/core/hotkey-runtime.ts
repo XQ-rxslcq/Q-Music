@@ -16,7 +16,7 @@ export function shouldRefreshGlobalHotkeys(opts: {
   return expected.some((a) => !have.has(a))
 }
 
-/** Electron 加速键变体（Windows 上 CommandOrControl 偶发失败） */
+/** Electron 加速键变体（Windows 上 CommandOrControl 偶发失败；数字兼注册小键盘 numN） */
 export function accelVariants(accel: string): string[] {
   const a = accel.trim()
   if (!a) return []
@@ -25,5 +25,17 @@ export function accelVariants(accel: string): string[] {
     out.push(a.replace(/CommandOrControl/gi, 'Control'))
     out.push(a.replace(/CommandOrControl/gi, 'Ctrl'))
   }
-  return [...new Set(out)]
+  // 顶行数字 ↔ 小键盘：Electron 小键盘键名为 num0–num9（QQ 等原生 RegisterHotKey 用 VK_NUMPAD*）
+  const expanded: string[] = []
+  for (const item of out) {
+    expanded.push(item)
+    const m = item.match(/^(.*\+)(\d)$/i)
+    if (m) {
+      expanded.push(`${m[1]}num${m[2]}`)
+      continue
+    }
+    const n = item.match(/^(.*\+)num(\d)$/i)
+    if (n) expanded.push(`${n[1]}${n[2]}`)
+  }
+  return [...new Set(expanded)]
 }

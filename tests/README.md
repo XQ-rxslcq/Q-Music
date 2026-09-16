@@ -1,4 +1,4 @@
-﻿# tests/ · Q-Music 回归测试
+# tests/ · Q-Music 回归测试
 
 Vitest 套件，门禁：`npm test`（见 [docs/testing.md](../docs/testing.md)）。
 
@@ -8,7 +8,7 @@ Vitest 套件，门禁：`npm test`（见 [docs/testing.md](../docs/testing.md)�
 | name | type | size | created | modified | notes |
 |------|------|------|---------|----------|-------|
 | app-icon.test.ts | file | 1.3 KB | 2026-09-09 | 2026-09-10 | |
-| app-paths.test.ts | file | 2.9 KB | 2026-09-08 | 2026-09-10 | |
+| app-paths.test.ts | file | 3.4 KB | 2026-09-08 | 2026-09-11 | |
 | desktop-lyrics.test.ts | file | 5.0 KB | 2026-09-09 | 2026-09-10 | |
 | filename-meta.test.ts | file | 2.2 KB | 2026-09-08 | 2026-09-10 | |
 | fixtures-lyrics.test.ts | file | 940 B | 2026-09-08 | 2026-09-10 | |
@@ -18,10 +18,11 @@ Vitest 套件，门禁：`npm test`（见 [docs/testing.md](../docs/testing.md)�
 | lyrics.test.ts | file | 8.4 KB | 2026-09-08 | 2026-09-10 | |
 | media-url.test.ts | file | 499 B | 2026-09-08 | 2026-09-10 | |
 | paths.test.ts | file | 572 B | 2026-09-08 | 2026-09-10 | |
+| playback-hold-hotkeys.test.ts | file | 2.0 KB | 2026-09-16 | 2026-09-16 | 播放挂起 / 小键盘加速键 / 音量步长 |
 | queue.test.ts | file | 3.3 KB | 2026-09-08 | 2026-09-10 | |
-| show-main-hotkeys.test.ts | file | 3.1 KB | 2026-09-10 | 2026-09-10 | |
+| show-main-hotkeys.test.ts | file | 3.2 KB | 2026-09-10 | 2026-09-16 | |
 | trim.test.ts | file | 1.1 KB | 2026-09-08 | 2026-09-10 | |
-| ux-extras.test.ts | file | 2.6 KB | 2026-09-09 | 2026-09-10 | |
+| ux-extras.test.ts | file | 5.2 KB | 2026-09-09 | 2026-09-16 | |
 | volume.test.ts | file | 1.3 KB | 2026-09-08 | 2026-09-10 | |
 | window-title.test.ts | file | 1.0 KB | 2026-09-10 | 2026-09-10 | |
 | fixtures | dir | - | 2026-09-08 | 2026-09-08 | |

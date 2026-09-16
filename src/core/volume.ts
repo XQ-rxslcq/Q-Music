@@ -2,6 +2,10 @@
 
 export const DEFAULT_TARGET_LUFS = -18
 
+/** 快捷键音量加减步长（百分数）：5 → ±0.05 */
+export const VOLUME_HOTKEY_STEP_PERCENT = 5
+export const VOLUME_HOTKEY_STEP = VOLUME_HOTKEY_STEP_PERCENT / 100
+
 export function dbToLinear(db: number): number {
   return 10 ** (db / 20)
 }

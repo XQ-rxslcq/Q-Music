@@ -23,6 +23,7 @@ type Props = {
   onSeek: (sec: number) => void
   onSeekEndNext: () => void
   onOpenMatch?: () => void
+  onLyricsContextMenu?: (e: React.MouseEvent) => void
 }
 
 function ChevronDown() {
@@ -54,6 +55,7 @@ export default function SongPage({
   onSeek,
   onSeekEndNext,
   onOpenMatch,
+  onLyricsContextMenu,
 }: Props) {
   const [localFollow, setLocalFollow] = useState(0)
   useEffect(() => {
@@ -82,7 +84,14 @@ export default function SongPage({
           </div>
         </div>
       </div>
-      <div className="song-page-body">
+      <div
+        className="song-page-body"
+        onContextMenu={(e) => {
+          if (!onLyricsContextMenu) return
+          e.preventDefault()
+          onLyricsContextMenu(e)
+        }}
+      >
         {empty ? (
           <div className="lyrics empty">
             暂无歌词
@@ -90,6 +99,11 @@ export default function SongPage({
               <button type="button" className="primary" style={{ marginTop: 12 }} onClick={onOpenMatch}>
                 打开歌词匹配工作台
               </button>
+            )}
+            {onLyricsContextMenu && (
+              <p className="theme-tip" style={{ marginTop: 8 }}>
+                也可右键打开歌词菜单
+              </p>
             )}
           </div>
         ) : (
@@ -102,7 +116,7 @@ export default function SongPage({
             resumeFollowKey={localFollow}
             resolveFont={resolveFont}
             pageLyrics={pl}
-            clickTitle="点击跳转到这句"
+            clickTitle="点击跳转到这句 · 空白处右键打开歌词菜单"
             onLineClick={(_i, line) => {
               const { seekSec, triggerNext } = clampLyricSeek(line.timeMs, duration)
               onSeek(seekSec)

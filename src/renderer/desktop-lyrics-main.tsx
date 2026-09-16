@@ -75,52 +75,40 @@ function textPaintStyle(
         }
       : {}
 
+  // 当前行 / 待播行共用同一套排版与「clip 填色」路径，避免实心色 vs 透明渐变两套渲染观感不一致
+  const base: CSSProperties = {
+    fontSize: size,
+    fontWeight: weight,
+    lineHeight: 1.25,
+    whiteSpace: 'nowrap',
+    display: 'inline-block',
+    textShadow: shadow,
+    ...stroke,
+    color: 'transparent',
+    WebkitTextFillColor: 'transparent',
+    WebkitBackgroundClip: 'text',
+    backgroundClip: 'text',
+  }
+
   if (on && settings.karaoke && progress != null) {
     const pct = Math.min(1, Math.max(0, progress)) * 100
     return {
-      fontSize: size,
-      fontWeight: weight,
-      lineHeight: 1.25,
-      whiteSpace: 'nowrap',
-      display: 'inline-block',
-      textShadow: shadow,
-      ...stroke,
+      ...base,
       backgroundImage: `linear-gradient(90deg, ${settings.sungColor} ${pct}%, ${settings.unsungColor} ${pct}%)`,
-      WebkitBackgroundClip: 'text',
-      backgroundClip: 'text',
-      color: 'transparent',
-      WebkitTextFillColor: 'transparent',
     }
   }
 
   if (settings.fillMode === 'gradient' && on) {
     return {
-      fontSize: size,
-      fontWeight: weight,
-      lineHeight: 1.25,
-      whiteSpace: 'nowrap',
-      display: 'inline-block',
-      textShadow: shadow,
-      ...stroke,
+      ...base,
       backgroundImage: `linear-gradient(90deg, ${settings.gradientFrom}, ${settings.gradientTo})`,
-      WebkitBackgroundClip: 'text',
-      backgroundClip: 'text',
-      color: 'transparent',
-      WebkitTextFillColor: 'transparent',
     }
   }
 
   const fill = on ? settings.activeColor : settings.color
-
   return {
-    fontSize: size,
-    fontWeight: weight,
-    lineHeight: 1.25,
-    color: fill,
-    whiteSpace: 'nowrap',
-    display: 'inline-block',
-    textShadow: shadow,
-    ...stroke,
+    ...base,
+    backgroundImage: `linear-gradient(90deg, ${fill} 0%, ${fill} 100%)`,
   }
 }
 
@@ -255,15 +243,18 @@ function App() {
   )
 
   const rows = useMemo(() => {
+    // 有歌词数据时：前奏 / 末句之后都不显示「暂无歌词」，末句后仍钉在最后一句
     if (!lines.length) return [] as Array<{ text: string; on: boolean; slot: 'primary' | 'secondary' }>
+    const idx = active >= 0 ? active : 0
+    const on = active >= 0
     if (settings.lineCount === 1) {
-      const t = active >= 0 ? lines[active]?.text : ''
-      return t ? [{ text: t, on: true, slot: 'primary' as const }] : []
+      const t = lines[idx]?.text || ''
+      return [{ text: t || '…', on, slot: 'primary' as const }]
     }
-    const cur = active >= 0 ? lines[active]?.text : ''
-    const next = active >= 0 ? lines[active + 1]?.text : lines[0]?.text
+    const cur = lines[idx]?.text || ''
+    const next = lines[idx + 1]?.text
     const out: Array<{ text: string; on: boolean; slot: 'primary' | 'secondary' }> = []
-    if (cur) out.push({ text: cur, on: true, slot: 'primary' })
+    out.push({ text: cur || '…', on, slot: 'primary' })
     if (next) out.push({ text: next, on: false, slot: 'secondary' })
     return out
   }, [lines, active, settings.lineCount])

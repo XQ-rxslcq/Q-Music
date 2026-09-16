@@ -101,6 +101,9 @@ function setAppQuitting(v: boolean) {
   ;(app as AppWithQuitFlag).isQuitting = v
 }
 
+// Windows 默认 Overlay 滚动条会忽略 ::-webkit-scrollbar；关掉才能用自定义细圆角条
+app.commandLine.appendSwitch('disable-overlay-scrollbar')
+
 // 二次启动：先轻量读配置 + 抢锁，失败立刻退出（不做 bootstrap）
 const peek = peekSingleInstancePolicy(__dirname)
 const enforceSingleInstance = app.isPackaged && !peek.allowMultiInstance

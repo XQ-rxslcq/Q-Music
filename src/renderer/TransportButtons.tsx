@@ -1,5 +1,6 @@
 /** 等大等样式播放控件：模式 | 上一首 | 播放 | 下一首 | 词 */
 
+import type { MouseEvent } from 'react'
 import type { PlayMode } from '../core/queue'
 
 type LyricsBtnState = 'off' | 'unlocked' | 'locked'
@@ -16,10 +17,11 @@ type Props = {
   className?: string
   /** 完整播放条：模式在上一首左侧 */
   mode?: PlayMode
-  onCycleMode?: () => void
+  onCycleMode?: (e: MouseEvent) => void
   /** 完整播放条：词按钮在下一首右侧 */
   lyricsState?: LyricsBtnState
-  onCycleLyrics?: () => void
+  onCycleLyrics?: (e: MouseEvent) => void
+  onLyricsContextMenu?: (e: MouseEvent) => void
 }
 
 function IconPrev() {
@@ -152,6 +154,7 @@ export default function TransportButtons({
   onCycleMode,
   lyricsState,
   onCycleLyrics,
+  onLyricsContextMenu,
 }: Props) {
   return (
     <div className={`transport ${className || ''}`.trim()}>
@@ -198,7 +201,7 @@ export default function TransportButtons({
             <button
               type="button"
               className="ctrl-btn"
-              onClick={onCycleMode}
+              onClick={(e) => onCycleMode(e)}
               title={MODE_TITLE[mode]}
               aria-label={MODE_TITLE[mode]}
             >
@@ -239,13 +242,18 @@ export default function TransportButtons({
             <button
               type="button"
               className={`ctrl-btn ctrl-ci ${lyricsState && lyricsState !== 'off' ? 'on' : ''}`}
-              onClick={onCycleLyrics}
+              onClick={(e) => onCycleLyrics(e)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                onLyricsContextMenu?.(e)
+              }}
               title={
                 lyricsState === 'off'
-                  ? '桌面歌词：显示（未锁定）'
+                  ? '桌面歌词：显示（未锁定）· 右键更多'
                   : lyricsState === 'unlocked'
-                    ? '桌面歌词：锁定'
-                    : '桌面歌词：隐藏'
+                    ? '桌面歌词：锁定 · 右键更多'
+                    : '桌面歌词：隐藏 · 右键更多'
               }
               aria-label="桌面歌词"
             >

@@ -33,20 +33,26 @@ type Props = {
   open: boolean
   tracks: Track[]
   initialTrackId?: string | null
+  /** 打开时加载该曲已有歌词进入编辑 */
+  initialEditExisting?: boolean
   lyricsRootAbs?: string | null
   onClose: () => void
   onSaved: (library: LibraryPayload) => void
   onLyricsRootChange: (library: LibraryPayload, absPath: string | null) => void
+  /** 试听开始/结束时通知，用于挂起/恢复主播放 */
+  onPreviewPlayingChange?: (playing: boolean) => void
 }
 
 export default function LyricsMatchDrawer({
   open,
   tracks,
   initialTrackId,
+  initialEditExisting = false,
   lyricsRootAbs,
   onClose,
   onSaved,
   onLyricsRootChange,
+  onPreviewPlayingChange,
 }: Props) {
   const missing = useMemo(() => tracks.filter((t) => !t.lyricsRel), [tracks])
   const [onlyMissing, setOnlyMissing] = useState(true)
@@ -74,9 +80,62 @@ export default function LyricsMatchDrawer({
   const [previewKey, setPreviewKey] = useState(0)
   const [lyricsFollowKey, setLyricsFollowKey] = useState(0)
   const [dirty, setDirty] = useState(false)
+  const [pasteHeight, setPasteHeight] = useState(96)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const pendingEditExisting = useRef(false)
+  const pasteResizeRef = useRef<{ startY: number; startH: number } | null>(null)
 
   const markDirty = () => setDirty(true)
+
+  const applyLoadedLyrics = (text: string, label: string) => {
+    const cleaned = text.replace(/^\uFEFF/, '')
+    setSelectedHitId(null)
+    setRawLrc(cleaned)
+    setOffsetMs(0)
+    setRate(1)
+    setSamples([])
+    setPlaying(false)
+    setT(0)
+    setPreviewKey((k) => k + 1)
+    markDirty()
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+    }
+    const next = resolveLyricLines(cleaned)
+    if (next.fromPlain) {
+      setCalibrateMode('line')
+      setLineTimes(next.lines.map(() => 0))
+      setStampedLines([])
+      setLineCursor(0)
+      setMsg(`${label}（纯文本 ${next.lines.length} 行）：请逐句对点或改字`)
+    } else {
+      setLineTimes(null)
+      setStampedLines([])
+      setLineCursor(0)
+      setCalibrateMode('fit')
+      setMsg(`${label}（${next.lines.length} 行）`)
+    }
+  }
+
+  const loadExistingLyrics = async (trackId?: string) => {
+    const id = trackId || active?.id
+    if (!id) return
+    setBusy(true)
+    setMsg('正在加载已有歌词…')
+    try {
+      const res = await window.qmusic.loadLyricsForTrack(id)
+      if (!res.content?.trim()) {
+        setMsg('当前曲目没有已绑定的歌词内容')
+        return
+      }
+      applyLoadedLyrics(res.content, '已载入现有歌词')
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '加载已有歌词失败')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const resetPreview = (nextRaw = '') => {
     setRawLrc(nextRaw)
@@ -98,13 +157,21 @@ export default function LyricsMatchDrawer({
   }
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      pendingEditExisting.current = false
+      return
+    }
+    if (initialEditExisting) {
+      setOnlyMissing(false)
+      pendingEditExisting.current = true
+    }
+    const pool = initialEditExisting ? tracks : list
     const id =
-      initialTrackId && list.some((x) => x.id === initialTrackId)
+      initialTrackId && pool.some((x) => x.id === initialTrackId)
         ? initialTrackId
-        : list[0]?.id || null
+        : pool[0]?.id || null
     setActiveId(id)
-  }, [open, initialTrackId, list])
+  }, [open, initialTrackId, initialEditExisting, list, tracks])
 
   useEffect(() => {
     if (!active) {
@@ -117,6 +184,10 @@ export default function LyricsMatchDrawer({
     setSelectedHitId(null)
     resetPreview('')
     setMsg(null)
+    if (pendingEditExisting.current) {
+      pendingEditExisting.current = false
+      void loadExistingLyrics(active.id)
+    }
   }, [active?.id])
 
   const resolved = useMemo(() => (rawLrc.trim() ? resolveLyricLines(rawLrc) : null), [rawLrc])
@@ -268,7 +339,14 @@ export default function LyricsMatchDrawer({
     if (!a) return
     if (playing) void a.play().catch(() => setPlaying(false))
     else a.pause()
-  }, [playing])
+    onPreviewPlayingChange?.(playing)
+  }, [playing, onPreviewPlayingChange])
+
+  useEffect(() => {
+    if (open) return
+    setPlaying(false)
+    onPreviewPlayingChange?.(false)
+  }, [open, onPreviewPlayingChange])
 
   if (!open) return null
 
@@ -389,6 +467,11 @@ export default function LyricsMatchDrawer({
         offsetMs: 0,
       })
     }
+    if (active.lyricsRel) {
+      const title = active.titleZh || active.titleJa || active.titleEn || active.title || '当前曲目'
+      const ok = window.confirm(`「${title}」已有歌词文件，确定覆盖保存？`)
+      if (!ok) return
+    }
     setBusy(true)
     try {
       const res = await window.qmusic.saveLyricsToTrack(active.id, content)
@@ -480,6 +563,15 @@ export default function LyricsMatchDrawer({
             <button type="button" className="primary" disabled={busy || !active} onClick={() => void search()}>
               搜索
             </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy || !active?.lyricsRel}
+              title={active?.lyricsRel ? '载入并编辑已绑定的歌词' : '当前曲目未绑定歌词'}
+              onClick={() => void loadExistingLyrics()}
+            >
+              编辑已有歌词
+            </button>
           </div>
           <ul className="list lm-list lm-hits">
             {hits.map((h) => (
@@ -501,33 +593,68 @@ export default function LyricsMatchDrawer({
           </ul>
           <label className="theme-field">
             <span>{fromPlain ? '歌词文本（可改；按换行分段）' : '或粘贴 / 编辑 LRC 文本'}</span>
-            <textarea
-              className="lm-paste"
-              rows={4}
-              value={rawLrc}
-              onChange={(e) => {
-                const text = e.target.value
-                setSelectedHitId(null)
-                setRawLrc(text)
-                setPreviewKey((k) => k + 1)
-                markDirty()
-                const next = resolveLyricLines(text)
-                if (next.fromPlain) {
-                  setCalibrateMode('line')
-                  setLineTimes((prev) => next.lines.map((_, i) => prev?.[i] ?? 0))
-                  setStampedLines((prev) => prev.filter((i) => i < next.lines.length))
-                  setOffsetMs(0)
-                  setRate(1)
-                  setSamples([])
-                } else if (next.lines.length) {
-                  setSamples([])
-                } else {
-                  setLineTimes(null)
-                  setStampedLines([])
-                }
-              }}
-              placeholder="粘贴 LRC，或纯文本（每行一句）…"
-            />
+            <div className="lm-paste-wrap" style={{ height: pasteHeight }}>
+              <div className="lm-paste-bar">
+                <span className="lm-paste-bar-hint">拖右上角调高度</span>
+                <button
+                  type="button"
+                  className="lm-paste-resize"
+                  title="拖动调整高度（上移加高）"
+                  aria-label="拖动调整高度"
+                  onPointerDown={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    const startY = e.clientY
+                    const startH = pasteHeight
+                    pasteResizeRef.current = { startY, startH }
+                    const target = e.currentTarget
+                    target.setPointerCapture(e.pointerId)
+                    const onMove = (ev: PointerEvent) => {
+                      const st = pasteResizeRef.current
+                      if (!st) return
+                      const next = Math.min(420, Math.max(72, st.startH + (st.startY - ev.clientY)))
+                      setPasteHeight(next)
+                    }
+                    const onUp = (ev: PointerEvent) => {
+                      pasteResizeRef.current = null
+                      target.releasePointerCapture(ev.pointerId)
+                      target.removeEventListener('pointermove', onMove)
+                      target.removeEventListener('pointerup', onUp)
+                      target.removeEventListener('pointercancel', onUp)
+                    }
+                    target.addEventListener('pointermove', onMove)
+                    target.addEventListener('pointerup', onUp)
+                    target.addEventListener('pointercancel', onUp)
+                  }}
+                />
+              </div>
+              <textarea
+                className="lm-paste"
+                value={rawLrc}
+                onChange={(e) => {
+                  const text = e.target.value
+                  setSelectedHitId(null)
+                  setRawLrc(text)
+                  setPreviewKey((k) => k + 1)
+                  markDirty()
+                  const next = resolveLyricLines(text)
+                  if (next.fromPlain) {
+                    setCalibrateMode('line')
+                    setLineTimes((prev) => next.lines.map((_, i) => prev?.[i] ?? 0))
+                    setStampedLines((prev) => prev.filter((i) => i < next.lines.length))
+                    setOffsetMs(0)
+                    setRate(1)
+                    setSamples([])
+                  } else if (next.lines.length) {
+                    setSamples([])
+                  } else {
+                    setLineTimes(null)
+                    setStampedLines([])
+                  }
+                }}
+                placeholder="粘贴 LRC，或纯文本（每行一句）…"
+              />
+            </div>
           </label>
 
           <div className="lm-col-tune">

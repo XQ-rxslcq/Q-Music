@@ -274,12 +274,17 @@ export function karaokeLineProgress(
   currentTimeSec: number,
   durationSec?: number,
 ): number {
+  // durationSec 保留供调用方兼容；末句不再用曲长做渐变，避免尾奏阶段观感像「没词」
+  void durationSec
   if (activeIndex < 0 || !lines[activeIndex]) return 0
   const t0 = lines[activeIndex].timeMs / 1000
-  const t1 =
-    lines[activeIndex + 1] != null
-      ? lines[activeIndex + 1].timeMs / 1000
-      : Math.max(t0 + 0.001, durationSec || t0 + 5)
+  const isLast = lines[activeIndex + 1] == null
+  // 末句之后（歌词时间轴已结束、歌曲未完）：钉在末句进度 100%
+  if (isLast) {
+    if (currentTimeSec < t0) return 0
+    return 1
+  }
+  const t1 = lines[activeIndex + 1]!.timeMs / 1000
   if (currentTimeSec <= t0) return 0
   if (currentTimeSec >= t1) return 1
   return (currentTimeSec - t0) / (t1 - t0)

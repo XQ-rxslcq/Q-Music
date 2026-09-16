@@ -1,6 +1,7 @@
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './styles.css'
+import { installJumpScrollbars } from './jump-scrollbars'
 
 window.addEventListener('error', (e) => {
   console.error('[Q-Music renderer error]', e.message, e.filename, e.lineno)
@@ -15,3 +16,4 @@ if (!window.qmusic) {
 
 // Electron 下不用 StrictMode：双挂载会竞态写回默认 theme.json
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />)
+requestAnimationFrame(() => installJumpScrollbars())
