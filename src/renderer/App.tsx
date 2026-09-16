@@ -523,8 +523,13 @@ export default function App() {
     goRelative(-1)
   }, [goRelative])
 
-  const showClickHud = (x: number, y: number, text: string) => {
-    setClickHud({ id: Date.now(), x, y, text })
+  const showClickHud = (
+    x: number,
+    y: number,
+    text: string,
+    anchor?: HTMLElement | null,
+  ) => {
+    setClickHud({ id: Date.now(), x, y, text, anchor: anchor ?? null })
   }
 
   const MODE_LABEL: Record<PlayMode, string> = {
@@ -535,14 +540,14 @@ export default function App() {
   }
 
   const cycleDesktopLyrics = useCallback(
-    (at?: { x: number; y: number }) => {
+    (at?: { x: number; y: number; anchor?: HTMLElement | null }) => {
       setTheme((t) => {
         const dl = t.desktopLyrics
         const step = nextDesktopLyricsCycle(
           { visible: Boolean(dl?.visible), locked: dl?.locked !== false },
           lyricsTripleCycle ? 'three' : 'two',
         )
-        if (at) showClickHud(at.x, at.y, step.toast)
+        if (at) showClickHud(at.x, at.y, step.toast, at.anchor)
         else setToast({ kind: 'ok', text: step.toast })
         return {
           ...t,
@@ -801,13 +806,13 @@ export default function App() {
     })
   }, [lyrics, currentTime, duration, current, theme.desktopLyrics, playing])
 
-  const cycleMode = (at?: { x: number; y: number }) => {
+  const cycleMode = (at?: { x: number; y: number; anchor?: HTMLElement | null }) => {
     const order: PlayMode[] = ['sequence', 'loop', 'single', 'shuffle']
     const next = order[(order.indexOf(mode) + 1) % order.length]
     setMode(next)
     if (next === 'shuffle') setShuffleOrder(shuffleIndices(queue.length, index))
     void window.qmusic.setPlayMode?.(next)
-    if (at) showClickHud(at.x, at.y, MODE_LABEL[next])
+    if (at) showClickHud(at.x, at.y, MODE_LABEL[next], at.anchor)
   }
 
   const playLibraryTrack = (track: Track) => {
@@ -1609,7 +1614,13 @@ export default function App() {
                 onToggle={() => setPlaying((p) => !p)}
                 onNext={goNext}
                 mode={mode}
-                onCycleMode={(e) => cycleMode({ x: e.clientX, y: e.clientY })}
+                onCycleMode={(e) =>
+                  cycleMode({
+                    x: e.clientX,
+                    y: e.clientY,
+                    anchor: e.currentTarget as HTMLElement,
+                  })
+                }
                 lyricsState={
                   !theme.desktopLyrics?.visible
                     ? 'off'
@@ -1617,7 +1628,13 @@ export default function App() {
                       ? 'unlocked'
                       : 'locked'
                 }
-                onCycleLyrics={(e) => cycleDesktopLyrics({ x: e.clientX, y: e.clientY })}
+                onCycleLyrics={(e) =>
+                  cycleDesktopLyrics({
+                    x: e.clientX,
+                    y: e.clientY,
+                    anchor: e.currentTarget as HTMLElement,
+                  })
+                }
                 onLyricsContextMenu={(e) => {
                   setLyricsCtx({ x: e.clientX, y: e.clientY })
                 }}
@@ -1643,8 +1660,15 @@ export default function App() {
                   onChange={(e) => {
                     const v = Number(e.target.value)
                     setVolume(v)
+                    const el = e.currentTarget
                     const at = volPointerRef.current
-                    if (at) showClickHud(at.x, at.y, `音量 ${Math.round(v * 100)}%`)
+                    const r = el.getBoundingClientRect()
+                    showClickHud(
+                      at?.x ?? r.left + r.width / 2,
+                      at?.y ?? r.top,
+                      `音量 ${Math.round(v * 100)}%`,
+                      el,
+                    )
                   }}
                 />
               </div>
