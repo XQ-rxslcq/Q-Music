@@ -2,6 +2,7 @@ import { appJoin, resolveDataDir } from './app-paths'
 import path from 'node:path'
 
 export type {
+  BgRotateSettings,
   Category,
   LyricsMap,
   MusicRoot,
@@ -11,11 +12,13 @@ export type {
 } from './library-model'
 
 export {
+  DEFAULT_BG_ROTATE,
   DEFAULT_THEME,
   displayTitle,
   fileBaseName,
   filterByCategory,
   makeTrackId,
+  mergeBgRotate,
   mergeTrackLists,
   mergeDesktopLyrics,
   mergePageLyrics,
@@ -67,12 +70,27 @@ export function resolveGainsPath(dataDir: string) {
   return path.join(dataDir, 'library', 'gains.json')
 }
 
+/** 歌词工作台自定义标签（仅工作台可见） */
+export function resolveWorkbenchTagsPath(dataDir: string) {
+  return path.join(dataDir, 'library', 'workbench-tags.json')
+}
+
 export function resolveBackgroundsDir(dataDir: string) {
   return path.join(dataDir, 'backgrounds')
 }
 
+/** 背景轮换图片池（相对 qmdata） */
+export function resolveBgRotateDir(dataDir: string) {
+  return path.join(dataDir, 'bg-rotate')
+}
+
 export function libraryDataDirs(dataDir: string): string[] {
-  return [dataDir, resolveLibraryDir(dataDir), resolveBackgroundsDir(dataDir)]
+  return [
+    dataDir,
+    resolveLibraryDir(dataDir),
+    resolveBackgroundsDir(dataDir),
+    resolveBgRotateDir(dataDir),
+  ]
 }
 
 /** @deprecated 兼容旧测试引用 */

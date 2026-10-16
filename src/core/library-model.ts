@@ -12,8 +12,11 @@ import {
   resolvePrimaryTitle,
   type TitleDisplaySettings,
 } from './title-display'
+import { DEFAULT_BG_ROTATE, mergeBgRotate, type BgRotateSettings } from './bg-rotate'
 
 export type { DesktopLyricsSettings, PageLyricsSettings } from './desktop-lyrics'
+export type { BgRotateSettings }
+export { DEFAULT_BG_ROTATE, mergeBgRotate } from './bg-rotate'
 export type { TitleDisplaySettings, TitleLang } from './title-display'
 export {
   DEFAULT_DESKTOP_LYRICS,
@@ -61,6 +64,10 @@ export type TrackRecord = {
   categoryIds: string[]
   lyricsRel: string | null
   addedAt: string
+  /** 文件修改时间（ms，来自 fs.stat.mtimeMs） */
+  mtimeMs?: number
+  /** 文件创建时间（ms，来自 fs.stat.birthtimeMs；不可用时回退 ctime） */
+  birthtimeMs?: number
   /** 列表主标题 / 副标题显隐 */
   titleDisplay?: TitleDisplaySettings
 }
@@ -73,9 +80,11 @@ export type ThemeSettings = {
   panelOpacity: number
   /** 面板不透明度低于 40% 时，为信息文字加反色描边 */
   lowOpacityTextStroke: boolean
-  bgStyle: 'gradient' | 'flat' | 'image'
+  bgStyle: 'gradient' | 'flat' | 'image' | 'rotate'
   flatColor: string
   bgImageRel: string | null
+  /** 背景轮换（图片池在 qmdata/bg-rotate/） */
+  bgRotate: BgRotateSettings
   desktopLyrics: DesktopLyricsSettings
   pageLyrics: PageLyricsSettings
 }
@@ -88,6 +97,7 @@ export const DEFAULT_THEME: ThemeSettings = {
   bgStyle: 'gradient',
   flatColor: '#141820',
   bgImageRel: null,
+  bgRotate: mergeBgRotate(DEFAULT_BG_ROTATE),
   desktopLyrics: mergeDesktopLyrics(DEFAULT_DESKTOP_LYRICS),
   pageLyrics: mergePageLyrics(DEFAULT_PAGE_LYRICS),
 }

@@ -19,12 +19,24 @@ import BehaviorDrawer from './BehaviorDrawer'
 import { formatTime } from '../core/format'
 import { toMediaUrl } from '../core/media-url'
 import { resolveLyricLines, type LyricLine } from '../core/lyrics'
-import { DEFAULT_THEME, mergeDesktopLyrics, mergePageLyrics } from '../core/library-model'
+import {
+  DEFAULT_THEME,
+  mergeBgRotate,
+  mergeDesktopLyrics,
+  mergePageLyrics,
+} from '../core/library-model'
 import { nextDesktopLyricsCycle } from '../core/desktop-lyrics'
 import { resolvePrimaryTitle } from '../core/title-display'
 import { createPlaybackHold } from '../core/playback-hold'
 import { VOLUME_HOTKEY_STEP } from '../core/volume'
 import TrackTitleCell from './TrackTitleCell'
+import UiSelect from './UiSelect'
+import {
+  sortLibraryTracks,
+  type LibrarySortDir,
+  type LibrarySortKey,
+} from '../core/library-sort'
+import { clearBgLayers, prefetchBgLayerImage, setBgLayerImage } from './bg-layers'
 import {
   DEFAULT_HOTKEY_BINDINGS,
   matchGlobalAccelInApp,
@@ -50,10 +62,21 @@ import type { Category, LibraryPayload, MusicRoot, ThemeSettings, Track } from '
 
 const NORM_KEY = 'qmusic.normalize'
 
+function mergeThemePayload(theme: ThemeSettings): ThemeSettings {
+  return {
+    ...DEFAULT_THEME,
+    ...theme,
+    bgRotate: mergeBgRotate(theme.bgRotate),
+    desktopLyrics: mergeDesktopLyrics(theme.desktopLyrics),
+    pageLyrics: mergePageLyrics(theme.pageLyrics),
+  }
+}
+
 function applyTheme(theme: ThemeSettings, bgImageUrl: string | null) {
   const root = document.documentElement
   root.dataset.theme = theme.mode
-  root.dataset.bg = theme.bgStyle
+  // 轮换与单图共用 image 样式（实际贴图由双图层预载切换，避免大图黑闪）
+  root.dataset.bg = theme.bgStyle === 'rotate' ? 'image' : theme.bgStyle
   root.style.setProperty('--accent', theme.accent)
   root.style.setProperty('--accent-dim', theme.accent)
   root.style.setProperty('--panel-opacity', String(theme.panelOpacity))
@@ -61,10 +84,10 @@ function applyTheme(theme: ThemeSettings, bgImageUrl: string | null) {
   const strokeOn =
     theme.lowOpacityTextStroke !== false && theme.panelOpacity < 0.4
   root.dataset.lowOpacityStroke = strokeOn ? '1' : '0'
-  if (theme.bgStyle === 'image' && bgImageUrl) {
-    root.style.setProperty('--bg-image', `url("${bgImageUrl}")`)
+  if ((theme.bgStyle === 'image' || theme.bgStyle === 'rotate') && bgImageUrl) {
+    setBgLayerImage(bgImageUrl)
   } else {
-    root.style.setProperty('--bg-image', 'none')
+    clearBgLayers()
   }
   const pl = mergePageLyrics(theme.pageLyrics)
   root.style.setProperty('--page-lyric-size', `${pl.fontSize}px`)
@@ -74,6 +97,17 @@ function applyTheme(theme: ThemeSettings, bgImageUrl: string | null) {
   root.style.setProperty('--page-bg-blur', `${pl.bgBlur}px`)
   root.dataset.pageBgBlur = pl.bgBlur > 0 ? '1' : '0'
   root.style.setProperty('--page-lyric-unsung', pl.unsungColor)
+}
+
+/** 轮换：预载「下一张」，到点切换时只需淡入 */
+function prefetchNextRotateImage(currentRel: string | null | undefined) {
+  void window.qmusic.listBgRotate().then((res) => {
+    const items = res?.items || []
+    if (items.length < 2) return
+    const i = currentRel ? items.findIndex((x) => x.rel === currentRel) : -1
+    const next = items[(i < 0 ? 0 : i + 1) % items.length]
+    if (next?.url) prefetchBgLayerImage(next.url)
+  })
 }
 
 function trackLabel(t: Track) {
@@ -112,6 +146,14 @@ export default function App() {
   const [songPageOpen, setSongPageOpen] = useState(false)
   const [playlistOpen, setPlaylistOpen] = useState(false)
   const [libraryQuery, setLibraryQuery] = useState('')
+  const [librarySortKey, setLibrarySortKey] = useState<LibrarySortKey>(() => {
+    const v = localStorage.getItem('qmusic.librarySortKey')
+    return v === 'artist' || v === 'title' || v === 'mtime' || v === 'birthtime' ? v : 'title'
+  })
+  const [librarySortDir, setLibrarySortDir] = useState<LibrarySortDir>(() => {
+    const v = localStorage.getItem('qmusic.librarySortDir')
+    return v === 'desc' ? 'desc' : 'asc'
+  })
   const [hotkeysOpen, setHotkeysOpen] = useState(false)
   const [behaviorOpen, setBehaviorOpen] = useState(false)
   const [rootsOpen, setRootsOpen] = useState(false)
@@ -139,6 +181,11 @@ export default function App() {
   const bannerHoverRef = useRef(false)
   const volPointerRef = useRef<{ x: number; y: number } | null>(null)
   const playingRef = useRef(false)
+  /** 切歌用最新快照，避免快捷键/连点仍读到旧 index 导致连跳或方向错乱 */
+  const indexRef = useRef(0)
+  const modeRef = useRef<PlayMode>('loop')
+  const shuffleOrderRef = useRef<number[]>([])
+  const queueLengthRef = useRef(0)
   const playbackHoldRef = useRef(
     createPlaybackHold({
       getPlaying: () => playingRef.current,
@@ -176,6 +223,19 @@ export default function App() {
   }
 
   const notify = (kind: 'info' | 'ok' | 'error', text: string) => setToast({ kind, text })
+
+  useEffect(() => {
+    indexRef.current = index
+  }, [index])
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
+  useEffect(() => {
+    shuffleOrderRef.current = shuffleOrder
+  }, [shuffleOrder])
+  useEffect(() => {
+    queueLengthRef.current = queue.length
+  }, [queue.length])
 
   // 有焦点时累计 5s 自动关横幅；鼠标在横幅上则暂停计时
   useEffect(() => {
@@ -234,12 +294,7 @@ export default function App() {
         }
       }
       const tp = await window.qmusic.getTheme()
-      const merged = {
-        ...DEFAULT_THEME,
-        ...tp.theme,
-        desktopLyrics: mergeDesktopLyrics(tp.theme.desktopLyrics),
-        pageLyrics: mergePageLyrics(tp.theme.pageLyrics),
-      }
+      const merged = mergeThemePayload(tp.theme)
       setTheme(merged)
       setBgImageUrl(tp.bgImageUrl)
       applyTheme(merged, tp.bgImageUrl)
@@ -293,6 +348,14 @@ export default function App() {
     })()
   }, [])
 
+  useEffect(() => {
+    localStorage.setItem('qmusic.librarySortKey', librarySortKey)
+  }, [librarySortKey])
+
+  useEffect(() => {
+    localStorage.setItem('qmusic.librarySortDir', librarySortDir)
+  }, [librarySortDir])
+
   const filteredLibrary = useMemo(() => {
     let list = library
     if (categoryFilter === '__uncategorized') {
@@ -301,23 +364,25 @@ export default function App() {
       list = list.filter((t) => t.categoryIds?.includes(categoryFilter))
     }
     const q = libraryQuery.trim().toLowerCase()
-    if (!q) return list
-    return list.filter((t) => {
-      const hay = [
-        t.title,
-        t.titleZh,
-        t.titleEn,
-        t.titleJa,
-        t.artist,
-        t.album,
-        trackLabel(t),
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      return hay.includes(q)
-    })
-  }, [library, categoryFilter, libraryQuery])
+    if (q) {
+      list = list.filter((t) => {
+        const hay = [
+          t.title,
+          t.titleZh,
+          t.titleEn,
+          t.titleJa,
+          t.artist,
+          t.album,
+          trackLabel(t),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+        return hay.includes(q)
+      })
+    }
+    return sortLibraryTracks(list, librarySortKey, librarySortDir)
+  }, [library, categoryFilter, libraryQuery, librarySortKey, librarySortDir])
 
   const filterLabel = useMemo(() => {
     if (!categoryFilter) return '总曲库'
@@ -484,34 +549,38 @@ export default function App() {
     }
   }
 
-  const goRelative = useCallback(
-    (direction: 1 | -1) => {
-      if (!queue.length) return
-      const result = resolveNextIndex({
-        mode,
-        queueLength: queue.length,
-        from: index,
-        direction,
-        shuffleOrder,
-      })
-      if (result.shuffleOrder) setShuffleOrder(result.shuffleOrder)
-      if (result.replay) {
-        const a = audioRef.current
-        if (a) {
-          a.currentTime = 0
-          void a.play()
-        }
-        return
+  const goRelative = useCallback((direction: 1 | -1) => {
+    const queueLength = queueLengthRef.current
+    if (!queueLength) return
+    const from = indexRef.current
+    const result = resolveNextIndex({
+      mode: modeRef.current,
+      queueLength,
+      from,
+      direction,
+      shuffleOrder: shuffleOrderRef.current,
+    })
+    if (result.shuffleOrder) {
+      shuffleOrderRef.current = result.shuffleOrder
+      setShuffleOrder(result.shuffleOrder)
+    }
+    if (result.replay) {
+      const a = audioRef.current
+      if (a) {
+        a.currentTime = 0
+        void a.play()
       }
-      if (result.stop) {
-        setPlaying(false)
-        return
-      }
-      setIndex(result.index)
-      setPlaying(true)
-    },
-    [queue.length, mode, index, shuffleOrder],
-  )
+      return
+    }
+    if (result.stop) {
+      setPlaying(false)
+      return
+    }
+    // 同步写 ref，避免紧挨着的第二次切歌仍读到旧 index
+    indexRef.current = result.index
+    setIndex(result.index)
+    setPlaying(true)
+  }, [])
 
   const goNext = useCallback(() => goRelative(1), [goRelative])
   const goPrev = useCallback(() => {
@@ -562,9 +631,25 @@ export default function App() {
     [lyricsTripleCycle],
   )
 
+  /** 快捷键专用：仅显隐，显示即锁定 */
   const toggleDesktopLyrics = useCallback(() => {
-    cycleDesktopLyrics()
-  }, [cycleDesktopLyrics])
+    setTheme((t) => {
+      const dl = t.desktopLyrics
+      const step = nextDesktopLyricsCycle(
+        { visible: Boolean(dl?.visible), locked: dl?.locked !== false },
+        'two',
+      )
+      setToast({ kind: 'ok', text: step.toast })
+      return {
+        ...t,
+        desktopLyrics: mergeDesktopLyrics({
+          ...(dl || {}),
+          visible: step.visible,
+          locked: step.locked,
+        }),
+      }
+    })
+  }, [])
 
   const toggleDesktopLyricsLock = useCallback(() => {
     setTheme((t) => {
@@ -770,12 +855,7 @@ export default function App() {
   useEffect(() => {
     const offTheme = window.qmusic.onThemeChanged?.((tp) => {
       skipThemePersist.current = true
-      const merged = {
-        ...DEFAULT_THEME,
-        ...tp.theme,
-        desktopLyrics: mergeDesktopLyrics(tp.theme.desktopLyrics),
-        pageLyrics: mergePageLyrics(tp.theme.pageLyrics),
-      }
+      const merged = mergeThemePayload(tp.theme)
       setTheme(merged)
       setBgImageUrl(tp.bgImageUrl)
       applyTheme(merged, tp.bgImageUrl)
@@ -1042,18 +1122,56 @@ export default function App() {
 
   const onThemeChange = (next: ThemeSettings) => setTheme(next)
 
+  const applyThemeFromPayload = useCallback(
+    (tp: { theme: ThemeSettings; bgImageUrl: string | null }) => {
+      skipThemePersist.current = true
+      const merged = mergeThemePayload(tp.theme)
+      setTheme(merged)
+      setBgImageUrl(tp.bgImageUrl)
+      applyTheme(merged, tp.bgImageUrl)
+    },
+    [],
+  )
+
   const onPickBackground = async () => {
     const tp = await window.qmusic.pickBackground()
-    const merged = {
-      ...DEFAULT_THEME,
-      ...tp.theme,
-      desktopLyrics: mergeDesktopLyrics(tp.theme.desktopLyrics),
-      pageLyrics: mergePageLyrics(tp.theme.pageLyrics),
-    }
-    setTheme(merged)
-    setBgImageUrl(tp.bgImageUrl)
-    applyTheme(merged, tp.bgImageUrl)
+    applyThemeFromPayload(tp)
   }
+
+  // 背景轮换：到期切图；提前约 3s 预载下一张到空闲图层缓存
+  useEffect(() => {
+    if (!themeReady || theme.bgStyle !== 'rotate') return
+    const sec = Math.max(5, theme.bgRotate?.intervalSec || 300)
+    const intervalMs = sec * 1000
+    const prefetchAheadMs = 3000
+    const pollMs = Math.min(10_000, Math.max(1_000, Math.floor(intervalMs / 6)))
+    let prefetchedForSwitchAt = 0
+
+    const tick = () => {
+      const rotate = mergeBgRotate(theme.bgRotate)
+      const last = rotate.lastSwitchedAt || 0
+      const dueAt = last > 0 ? last + intervalMs : Date.now()
+      if (last > 0 && Date.now() >= dueAt - prefetchAheadMs && prefetchedForSwitchAt !== dueAt) {
+        prefetchedForSwitchAt = dueAt
+        prefetchNextRotateImage(theme.bgImageRel)
+      }
+      void window.qmusic.tickBgRotate().then((res) => {
+        if (!res?.changed) return
+        applyThemeFromPayload(res)
+        prefetchNextRotateImage(res.theme.bgImageRel)
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, pollMs)
+    return () => window.clearInterval(id)
+  }, [
+    themeReady,
+    theme.bgStyle,
+    theme.bgRotate?.intervalSec,
+    theme.bgRotate?.lastSwitchedAt,
+    theme.bgImageRel,
+    applyThemeFromPayload,
+  ])
 
   const openEditTrack = (t: Track) => {
     setEditTrack(t)
@@ -1192,6 +1310,11 @@ export default function App() {
   }
 
   return (
+    <>
+    <div className="app-bg-stack" aria-hidden="true">
+      <div className="app-bg-layer" data-bg-layer="a" />
+      <div className="app-bg-layer" data-bg-layer="b" />
+    </div>
     <div className="shell">
       <TitleBar
         menuOpen={menuOpen}
@@ -1453,6 +1576,29 @@ export default function App() {
                   onChange={(e) => setLibraryQuery(e.target.value)}
                   aria-label="搜索曲库"
                 />
+                <div className="library-sort">
+                  <UiSelect
+                    className="library-sort-select"
+                    aria-label="曲库排序方式"
+                    value={librarySortKey}
+                    options={[
+                      { value: 'title', label: '歌名' },
+                      { value: 'artist', label: '歌手' },
+                      { value: 'mtime', label: '修改时间' },
+                      { value: 'birthtime', label: '创建时间' },
+                    ]}
+                    onChange={(v) => setLibrarySortKey(v as LibrarySortKey)}
+                  />
+                  <button
+                    type="button"
+                    className="library-sort-dir"
+                    title={librarySortDir === 'asc' ? '当前升序，点击改为降序' : '当前降序，点击改为升序'}
+                    aria-label={librarySortDir === 'asc' ? '升序' : '降序'}
+                    onClick={() => setLibrarySortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                  >
+                    {librarySortDir === 'asc' ? '升序' : '降序'}
+                  </button>
+                </div>
                 <button
                   type="button"
                   onClick={addFilteredToQueue}
@@ -1815,6 +1961,7 @@ export default function App() {
         value={theme}
         onChange={onThemeChange}
         onPickBackground={() => void onPickBackground()}
+        onThemePayload={applyThemeFromPayload}
         onClose={() => setThemeOpen(false)}
       />
       <LyricsStyleDrawer
@@ -1918,5 +2065,6 @@ export default function App() {
       )}
       <ClickHud hud={clickHud} onDone={() => setClickHud(null)} />
     </div>
+    </>
   )
 }

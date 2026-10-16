@@ -53,9 +53,10 @@ describe('nextDesktopLyricsCycle', () => {
     expect(c).toMatchObject({ visible: false, locked: true })
   })
 
-  it('two-state: hide ↔ show', () => {
+  it('two-state: hide ↔ show（显示即锁定，供快捷键）', () => {
     const a = nextDesktopLyricsCycle({ visible: false, locked: true }, 'two')
     expect(a).toMatchObject({ visible: true, locked: true })
+    expect(a.toast).toContain('锁定')
     const b = nextDesktopLyricsCycle(a, 'two')
     expect(b).toMatchObject({ visible: false, locked: true })
   })

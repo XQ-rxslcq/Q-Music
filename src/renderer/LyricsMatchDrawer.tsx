@@ -10,9 +10,23 @@ import {
   type LyricLine,
   type LyricTimingSample,
 } from '../core/lyrics'
+import {
+  sortLibraryTracks,
+  type LibrarySortDir,
+  type LibrarySortKey,
+} from '../core/library-sort'
+import {
+  VIRTUAL_TAG_CONFIGURED,
+  VIRTUAL_TAG_MISSING,
+  VIRTUAL_WORKBENCH_TAGS,
+  filterWorkbenchTracks,
+  type WorkbenchTag,
+  type WorkbenchTagMap,
+} from '../core/workbench-tags'
 import LyricsPanel from './LyricsPanel'
 import TransportButtons from './TransportButtons'
 import DrawerShell from './DrawerShell'
+import UiSelect from './UiSelect'
 import { formatTime } from '../core/format'
 import type { LibraryPayload, Track } from './vite-env'
 
@@ -55,8 +69,25 @@ export default function LyricsMatchDrawer({
   onPreviewPlayingChange,
 }: Props) {
   const missing = useMemo(() => tracks.filter((t) => !t.lyricsRel), [tracks])
-  const [onlyMissing, setOnlyMissing] = useState(true)
-  const list = onlyMissing ? missing : tracks
+  const [trackQuery, setTrackQuery] = useState('')
+  const [sortKey, setSortKey] = useState<LibrarySortKey>('title')
+  const [sortDir, setSortDir] = useState<LibrarySortDir>('asc')
+  const [wbTags, setWbTags] = useState<WorkbenchTag[]>([])
+  const [wbByTrack, setWbByTrack] = useState<WorkbenchTagMap>({})
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([VIRTUAL_TAG_MISSING])
+  const [newTagName, setNewTagName] = useState('')
+  const [libLyricsOpen, setLibLyricsOpen] = useState(false)
+  const [libLyricsQuery, setLibLyricsQuery] = useState('')
+
+  const list = useMemo(() => {
+    const filtered = filterWorkbenchTracks(tracks, {
+      query: trackQuery,
+      selectedTagIds,
+      byTrack: wbByTrack,
+    })
+    return sortLibraryTracks(filtered, sortKey, sortDir)
+  }, [tracks, trackQuery, selectedTagIds, wbByTrack, sortKey, sortDir])
+
   const [activeId, setActiveId] = useState<string | null>(null)
   const active = list.find((t) => t.id === activeId) || list[0] || null
 
@@ -87,7 +118,7 @@ export default function LyricsMatchDrawer({
 
   const markDirty = () => setDirty(true)
 
-  const applyLoadedLyrics = (text: string, label: string) => {
+  const applyLoadedLyrics = (text: string, label: string, opts?: { dirty?: boolean }) => {
     const cleaned = text.replace(/^\uFEFF/, '')
     setSelectedHitId(null)
     setRawLrc(cleaned)
@@ -97,7 +128,8 @@ export default function LyricsMatchDrawer({
     setPlaying(false)
     setT(0)
     setPreviewKey((k) => k + 1)
-    markDirty()
+    if (opts?.dirty !== false) markDirty()
+    else setDirty(false)
     if (audioRef.current) {
       audioRef.current.pause()
       audioRef.current.currentTime = 0
@@ -114,11 +146,11 @@ export default function LyricsMatchDrawer({
       setStampedLines([])
       setLineCursor(0)
       setCalibrateMode('fit')
-      setMsg(`${label}（${next.lines.length} 行）`)
+      setMsg(`${label}（${next.lines.length} 行）· 保存时才覆盖文件`)
     }
   }
 
-  const loadExistingLyrics = async (trackId?: string) => {
+  const loadExistingLyrics = async (trackId?: string, opts?: { dirty?: boolean }) => {
     const id = trackId || active?.id
     if (!id) return
     setBusy(true)
@@ -129,7 +161,7 @@ export default function LyricsMatchDrawer({
         setMsg('当前曲目没有已绑定的歌词内容')
         return
       }
-      applyLoadedLyrics(res.content, '已载入现有歌词')
+      applyLoadedLyrics(res.content, '已载入现有歌词', { dirty: opts?.dirty !== false })
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '加载已有歌词失败')
     } finally {
@@ -156,22 +188,119 @@ export default function LyricsMatchDrawer({
     }
   }
 
+  /** 切换曲目前若有未保存改动：先确认，避免静默丢弃（旧实现直接 setActiveId） */
+  const requestSwitchTrack = (id: string) => {
+    if (id === active?.id) return
+    if (dirty && !window.confirm('当前曲目有未保存的歌词改动，切换将丢弃这些改动，确定切换？')) return
+    setActiveId(id)
+  }
+
+  // 打开抽屉时：载入标签 + 初始选中（勿依赖 list，否则标签回写会把选中打回第一首）
   useEffect(() => {
     if (!open) {
       pendingEditExisting.current = false
       return
     }
     if (initialEditExisting) {
-      setOnlyMissing(false)
+      setSelectedTagIds([])
       pendingEditExisting.current = true
     }
-    const pool = initialEditExisting ? tracks : list
+    void window.qmusic.getWorkbenchTags().then((res) => {
+      setWbTags(res.tags || [])
+      setWbByTrack(res.byTrack || {})
+    })
+    const pool = tracks
     const id =
       initialTrackId && pool.some((x) => x.id === initialTrackId)
         ? initialTrackId
         : pool[0]?.id || null
     setActiveId(id)
-  }, [open, initialTrackId, initialEditExisting, list, tracks])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在打开/指定曲目变化时初始化选中
+  }, [open, initialTrackId, initialEditExisting])
+
+  // 筛选后当前曲不在列表里时，落到可见第一首
+  useEffect(() => {
+    if (!open) return
+    if (!list.length) {
+      setActiveId(null)
+      return
+    }
+    setActiveId((prev) => (prev && list.some((t) => t.id === prev) ? prev : list[0]!.id))
+  }, [open, list])
+
+  const toggleFilterTag = (tagId: string) => {
+    setSelectedTagIds((prev) =>
+      prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId],
+    )
+  }
+
+  const applyWbState = (res: { tags: WorkbenchTag[]; byTrack: WorkbenchTagMap }) => {
+    setWbTags(res.tags || [])
+    setWbByTrack(res.byTrack || {})
+  }
+
+  const onAddTag = async () => {
+    const name = newTagName.trim()
+    if (!name) return
+    const res = await window.qmusic.addWorkbenchTag(name)
+    applyWbState(res)
+    setNewTagName('')
+  }
+
+  const onRemoveTagDef = async (tagId: string) => {
+    const res = await window.qmusic.removeWorkbenchTag(tagId)
+    applyWbState(res)
+    setSelectedTagIds((prev) => prev.filter((id) => id !== tagId))
+  }
+
+  const onToggleTrackTag = async (tagId: string) => {
+    if (!active) return
+    const cur = new Set(wbByTrack[active.id] || [])
+    if (cur.has(tagId)) cur.delete(tagId)
+    else cur.add(tagId)
+    const res = await window.qmusic.setTrackWorkbenchTags(active.id, [...cur])
+    applyWbState(res)
+  }
+
+  const configuredTracks = useMemo(() => {
+    const q = libLyricsQuery.trim().toLowerCase()
+    return tracks
+      .filter((t) => t.lyricsRel)
+      .filter((t) => {
+        if (!q) return true
+        const hay = [t.title, t.titleZh, t.titleEn, t.titleJa, t.artist, t.album]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+        return hay.includes(q)
+      })
+      .slice(0, 80)
+  }, [tracks, libLyricsQuery])
+
+  const loadFromConfiguredTrack = async (trackId: string) => {
+    if (!active) return
+    setBusy(true)
+    setMsg('正在加载已配歌词…')
+    try {
+      const res = await window.qmusic.loadLyricsForTrack(trackId)
+      if (!res.content?.trim()) {
+        setMsg('所选曲目没有可读歌词内容')
+        return
+      }
+      const src = tracks.find((t) => t.id === trackId)
+      const label = src
+        ? `已从「${src.titleZh || src.title || '曲目'}」载入`
+        : '已从已配歌词库载入'
+      applyLoadedLyrics(res.content, label, { dirty: true })
+      setLibLyricsOpen(false)
+      setSelectedHitId(null)
+      setHits([])
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '加载失败')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     if (!active) {
@@ -184,9 +313,10 @@ export default function LyricsMatchDrawer({
     setSelectedHitId(null)
     resetPreview('')
     setMsg(null)
-    if (pendingEditExisting.current) {
+    // 已配曲：先展示现有歌词；重新搜索/粘贴可改预览，仅保存时覆盖
+    if (pendingEditExisting.current || active.lyricsRel) {
       pendingEditExisting.current = false
-      void loadExistingLyrics(active.id)
+      void loadExistingLyrics(active.id, { dirty: false })
     }
   }, [active?.id])
 
@@ -199,19 +329,21 @@ export default function LyricsMatchDrawer({
     if (calibrateMode === 'line' && lineTimes && lineTimes.length === originLines.length) {
       if (fromPlain) {
         // 未标注句放到远处，避免全 0 时高亮跳到最后一行
-        return originLines.map((l, i) => ({
+        const base = originLines.map((l, i) => ({
           ...l,
           timeMs: stampedLines.includes(i) ? lineTimes[i]! : 1_000_000_000 + i,
         }))
+        return transformLyricLines(base, { offsetMs, rate })
       }
-      return applyLineTimes(originLines, lineTimes)
+      return transformLyricLines(applyLineTimes(originLines, lineTimes), { offsetMs, rate })
     }
     if (fromPlain) {
       if (lineTimes && lineTimes.length === originLines.length) {
-        return originLines.map((l, i) => ({
+        const base = originLines.map((l, i) => ({
           ...l,
           timeMs: stampedLines.includes(i) ? lineTimes[i]! : 1_000_000_000 + i,
         }))
+        return transformLyricLines(base, { offsetMs, rate })
       }
       return originLines.map((l, i) => ({ ...l, timeMs: 1_000_000_000 + i }))
     }
@@ -230,20 +362,24 @@ export default function LyricsMatchDrawer({
     setT(next)
   }
 
+  /** 播放绝对时间 → 源时间轴（再经 offset/rate 变换后对齐播放） */
+  const playMsToSourceMs = (playTimeMs: number) => {
+    const r = rate || 1
+    return Math.max(0, Math.round((playTimeMs - offsetMs) / r))
+  }
+
   const enterLineMode = (seedLines?: LyricLine[]) => {
     const lines = seedLines || originLines
     if (!lines?.length) return
-    const base = fromPlain || seedLines
-      ? lines
-      : transformLyricLines(lines, { offsetMs, rate })
-    setLineTimes(base.map((l) => l.timeMs))
+    // 保留当前偏移/倍率：逐句时间轴用原始 LRC 时间，预览时再套 transform
+    setLineTimes(lines.map((l) => l.timeMs))
     setStampedLines([])
     setLineCursor(0)
     setCalibrateMode('line')
     setMsg(
       fromPlain || seedLines
-        ? '纯文本已按换行分段：播放到该句时点击行或「标记当前句」钉时间；文本框可随时改字'
-        : '逐句对点：播放到该句时点击歌词行（或点「标记当前句」），已标行会显示时间戳',
+        ? '纯文本已按换行分段：播放到该句时点击行或「标记当前句」钉时间；仍可用左侧偏移/倍率整体微调'
+        : '逐句对点：左键钉时间；偏移/倍率仍可用，方便整体调整',
     )
   }
 
@@ -262,7 +398,8 @@ export default function LyricsMatchDrawer({
     if (!originLines || !lineTimes) return
     const playTimeMs = Math.round((audioRef.current?.currentTime ?? t) * 1000)
     const nextTimes = [...lineTimes]
-    nextTimes[index] = playTimeMs
+    // 存源时间，预览/保存再套偏移与倍率
+    nextTimes[index] = playMsToSourceMs(playTimeMs)
     setLineTimes(nextTimes)
     setStampedLines((prev) => (prev.includes(index) ? prev : [...prev, index].sort((a, b) => a - b)))
     const nextCursor = Math.min(index + 1, originLines.length - 1)
@@ -286,12 +423,7 @@ export default function LyricsMatchDrawer({
       setStampedLines((prev) => prev.filter((i) => i !== index))
       if (lineTimes) {
         const next = [...lineTimes]
-        if (fromPlain) {
-          next[index] = 0
-        } else {
-          const base = transformLyricLines(originLines, { offsetMs, rate })
-          next[index] = base[index]?.timeMs ?? next[index]
-        }
+        next[index] = fromPlain ? 0 : (originLines[index]?.timeMs ?? next[index])
         setLineTimes(next)
       }
       setLineCursor(index)
@@ -455,7 +587,10 @@ export default function LyricsMatchDrawer({
         (calibrateMode === 'line' || resolvedNow.fromPlain) &&
         lineTimes &&
         lineTimes.length === resolvedNow.lines.length
-          ? applyLineTimes(resolvedNow.lines, lineTimes)
+          ? transformLyricLines(applyLineTimes(resolvedNow.lines, lineTimes), {
+              offsetMs,
+              rate,
+            })
           : transformLyricLines(resolvedNow.lines, { offsetMs, rate })
       content = serializeLrc({
         lines: linesForSave,
@@ -483,7 +618,9 @@ export default function LyricsMatchDrawer({
       setDirty(false)
       onSaved(res.library)
       const nextMissing = res.library.playable.filter((x) => !x.lyricsRel && x.id !== active.id)
-      if (onlyMissing && nextMissing[0]) setActiveId(nextMissing[0].id)
+      if (selectedTagIds.includes(VIRTUAL_TAG_MISSING) && nextMissing[0]) {
+        setActiveId(nextMissing[0].id)
+      }
     } finally {
       setBusy(false)
     }
@@ -523,18 +660,105 @@ export default function LyricsMatchDrawer({
 
       <div className="lm-grid">
         <section className="lm-col">
-          <label className="cat-check">
+          <div className="lm-track-tools">
             <input
-              type="checkbox"
-              checked={onlyMissing}
-              onChange={(e) => setOnlyMissing(e.target.checked)}
+              type="search"
+              className="library-search lm-track-search"
+              placeholder="筛选曲目 / 艺人"
+              value={trackQuery}
+              onChange={(e) => setTrackQuery(e.target.value)}
+              aria-label="工作台曲目搜索"
             />
-            只列未配词（{missing.length}/{tracks.length}）
-          </label>
+            <div className="library-sort">
+              <UiSelect
+                className="library-sort-select"
+                aria-label="工作台排序"
+                value={sortKey}
+                options={[
+                  { value: 'title', label: '歌名' },
+                  { value: 'artist', label: '歌手' },
+                  { value: 'mtime', label: '修改时间' },
+                  { value: 'birthtime', label: '创建时间' },
+                ]}
+                onChange={(v) => setSortKey(v as LibrarySortKey)}
+              />
+              <button
+                type="button"
+                className="library-sort-dir"
+                onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+              >
+                {sortDir === 'asc' ? '升序' : '降序'}
+              </button>
+            </div>
+          </div>
+          <div className="lm-tag-filters" role="group" aria-label="标签筛选（多选且需同时满足）">
+            {VIRTUAL_WORKBENCH_TAGS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`lm-tag-chip ${selectedTagIds.includes(t.id) ? 'on' : ''}`}
+                onClick={() => toggleFilterTag(t.id)}
+              >
+                {t.name}
+                {t.id === VIRTUAL_TAG_MISSING ? ` ${missing.length}` : ''}
+                {t.id === VIRTUAL_TAG_CONFIGURED ? ` ${tracks.length - missing.length}` : ''}
+              </button>
+            ))}
+            {wbTags.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`lm-tag-chip ${selectedTagIds.includes(t.id) ? 'on' : ''}`}
+                onClick={() => toggleFilterTag(t.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  if (window.confirm(`删除标签「${t.name}」？`)) void onRemoveTagDef(t.id)
+                }}
+                title="左键筛选；右键删除标签定义"
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+          <div className="lm-tag-add">
+            <input
+              type="text"
+              value={newTagName}
+              placeholder="新标签名"
+              onChange={(e) => setNewTagName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void onAddTag()
+              }}
+            />
+            <button type="button" className="ghost" disabled={!newTagName.trim()} onClick={() => void onAddTag()}>
+              添加标签
+            </button>
+          </div>
+          {active && wbTags.length > 0 && (
+            <div className="lm-tag-assign">
+              <span className="theme-tip">当前曲目标记：</span>
+              {wbTags.map((t) => {
+                const on = (wbByTrack[active.id] || []).includes(t.id)
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={`lm-tag-chip sm ${on ? 'on' : ''}`}
+                    onClick={() => void onToggleTrackTag(t.id)}
+                  >
+                    {t.name}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          <p className="theme-tip">
+            列表 {list.length}/{tracks.length} · 标签多选为同时满足 · 右键标签可删
+          </p>
           <ul className="list lm-list">
             {list.map((row) => (
               <li key={row.id} className={row.id === active?.id ? 'active' : ''}>
-                <button type="button" className="row" onClick={() => setActiveId(row.id)}>
+                <button type="button" className="row" onClick={() => requestSwitchTrack(row.id)}>
                   <span className={`lyric-flag ${row.lyricsRel ? 'on' : 'off'}`}>
                     {row.lyricsRel ? '词' : '·'}
                   </span>
@@ -545,7 +769,7 @@ export default function LyricsMatchDrawer({
                 </button>
               </li>
             ))}
-            {!list.length && <li className="empty">没有待处理曲目</li>}
+            {!list.length && <li className="empty">没有匹配曲目</li>}
           </ul>
         </section>
 
@@ -572,7 +796,49 @@ export default function LyricsMatchDrawer({
             >
               编辑已有歌词
             </button>
+            <button
+              type="button"
+              className={`ghost ${libLyricsOpen ? 'active-toggle' : ''}`}
+              disabled={busy || !active}
+              title="从曲库已配歌词中搜索并载入内容，再为本曲配置"
+              onClick={() => setLibLyricsOpen((v) => !v)}
+            >
+              {libLyricsOpen ? '收起已配库' : '加载现有歌词'}
+            </button>
           </div>
+          {libLyricsOpen && (
+            <div className="lm-lib-lyrics">
+              <input
+                type="search"
+                className="library-search"
+                placeholder="搜索已配歌词的曲目…"
+                value={libLyricsQuery}
+                onChange={(e) => setLibLyricsQuery(e.target.value)}
+                aria-label="搜索已配歌词"
+              />
+              <ul className="list lm-list lm-hits">
+                {configuredTracks.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      className="row lm-hit-row"
+                      disabled={busy || row.id === active?.id}
+                      onClick={() => void loadFromConfiguredTrack(row.id)}
+                    >
+                      <span className="lm-hit-title">
+                        {row.titleZh || row.titleJa || row.titleEn || row.title}
+                      </span>
+                      <span className="lm-hit-meta">
+                        {row.artist || '未知艺人'}
+                        {row.id === active?.id ? ' · 当前曲' : ''}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+                {!configuredTracks.length && <li className="empty">没有已配歌词可加载</li>}
+              </ul>
+            </div>
+          )}
           <ul className="list lm-list lm-hits">
             {hits.map((h) => (
               <li key={String(h.id)} className={selectedHitId === String(h.id) ? 'active' : ''}>
@@ -642,8 +908,7 @@ export default function LyricsMatchDrawer({
                     setCalibrateMode('line')
                     setLineTimes((prev) => next.lines.map((_, i) => prev?.[i] ?? 0))
                     setStampedLines((prev) => prev.filter((i) => i < next.lines.length))
-                    setOffsetMs(0)
-                    setRate(1)
+                    // 逐行模式下改字不清空偏移/倍率：编辑文本不该丢掉已调好的校准（需要时用「归零」）
                     setSamples([])
                   } else if (next.lines.length) {
                     setSamples([])
@@ -681,166 +946,166 @@ export default function LyricsMatchDrawer({
               </button>
             </div>
 
+            <label className="theme-field">
+              <span>偏移 (ms) · 步进可改{calibrateMode === 'line' ? ' · 逐句模式可整体微调' : ''}</span>
+              <div className="lm-num-row">
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!hasLines}
+                  onClick={() => {
+                    setOffsetMs((v) => v - Math.abs(offsetStep || 50))
+                    markDirty()
+                  }}
+                >
+                  −
+                </button>
+                <input
+                  className="lm-num"
+                  type="number"
+                  value={offsetMs}
+                  disabled={!hasLines}
+                  onChange={(e) => {
+                    setOffsetMs(Number(e.target.value) || 0)
+                    markDirty()
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!hasLines}
+                  onClick={() => {
+                    setOffsetMs((v) => v + Math.abs(offsetStep || 50))
+                    markDirty()
+                  }}
+                >
+                  +
+                </button>
+                <input
+                  className="lm-num lm-step"
+                  type="number"
+                  min={1}
+                  title="加减步进 ms"
+                  value={offsetStep}
+                  disabled={!hasLines}
+                  onChange={(e) => setOffsetStep(Math.max(1, Number(e.target.value) || 50))}
+                />
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!hasLines}
+                  onClick={() => {
+                    setOffsetMs(0)
+                    markDirty()
+                  }}
+                >
+                  归零
+                </button>
+              </div>
+            </label>
+
+            <label className="theme-field">
+              <span>速率（相对源时间轴，1 = 相同）</span>
+              <div className="lm-num-row">
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!hasLines}
+                  onClick={() => {
+                    setRate((v) => Math.round((v - 0.01) * 10000) / 10000)
+                    markDirty()
+                  }}
+                >
+                  −
+                </button>
+                <input
+                  className="lm-num"
+                  type="number"
+                  step={0.001}
+                  min={0.5}
+                  max={2}
+                  value={rate}
+                  disabled={!hasLines}
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    setRate(Number.isFinite(n) ? n : 1)
+                    markDirty()
+                  }}
+                />
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!hasLines}
+                  onClick={() => {
+                    setRate((v) => Math.round((v + 0.01) * 10000) / 10000)
+                    markDirty()
+                  }}
+                >
+                  +
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={!hasLines}
+                  onClick={() => {
+                    setRate(1)
+                    markDirty()
+                  }}
+                >
+                  1.0
+                </button>
+              </div>
+            </label>
+
             {calibrateMode === 'fit' ? (
-              <>
-                <label className="theme-field">
-                  <span>偏移 (ms) · 步进可改</span>
-                  <div className="lm-num-row">
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!hasLines}
-                      onClick={() => {
-                        setOffsetMs((v) => v - Math.abs(offsetStep || 50))
-                        markDirty()
-                      }}
-                    >
-                      −
-                    </button>
-                    <input
-                      className="lm-num"
-                      type="number"
-                      value={offsetMs}
-                      disabled={!hasLines}
-                      onChange={(e) => {
-                        setOffsetMs(Number(e.target.value) || 0)
-                        markDirty()
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!hasLines}
-                      onClick={() => {
-                        setOffsetMs((v) => v + Math.abs(offsetStep || 50))
-                        markDirty()
-                      }}
-                    >
-                      +
-                    </button>
-                    <input
-                      className="lm-num lm-step"
-                      type="number"
-                      min={1}
-                      title="加减步进 ms"
-                      value={offsetStep}
-                      disabled={!hasLines}
-                      onChange={(e) => setOffsetStep(Math.max(1, Number(e.target.value) || 50))}
-                    />
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!hasLines}
-                      onClick={() => {
-                        setOffsetMs(0)
-                        markDirty()
-                      }}
-                    >
-                      归零
-                    </button>
-                  </div>
-                </label>
-
-                <label className="theme-field">
-                  <span>速率（相对 LRC，1 = 相同）</span>
-                  <div className="lm-num-row">
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!hasLines}
-                      onClick={() => {
-                        setRate((v) => Math.round((v - 0.01) * 10000) / 10000)
-                        markDirty()
-                      }}
-                    >
-                      −
-                    </button>
-                    <input
-                      className="lm-num"
-                      type="number"
-                      step={0.001}
-                      min={0.5}
-                      max={2}
-                      value={rate}
-                      disabled={!hasLines}
-                      onChange={(e) => {
-                        const n = Number(e.target.value)
-                        setRate(Number.isFinite(n) ? n : 1)
-                        markDirty()
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!hasLines}
-                      onClick={() => {
-                        setRate((v) => Math.round((v + 0.01) * 10000) / 10000)
-                        markDirty()
-                      }}
-                    >
-                      +
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!hasLines}
-                      onClick={() => {
-                        setRate(1)
-                        markDirty()
-                      }}
-                    >
-                      1.0
-                    </button>
-                  </div>
-                </label>
-
-                <div className="theme-field">
-                  <span>采点估算（建议 3～4 点）· 右栏点行采点，右键撤销</span>
-                  <div className="panel-tools">
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!hasLines || samples.length < 2}
-                      onClick={() => {
-                        applyFitFromSamples(samples, true)
-                        markDirty()
-                      }}
-                    >
-                      用当前点重新计算
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost"
-                      disabled={!samples.length}
-                      onClick={() => {
-                        setSamples([])
-                        markDirty()
-                        setMsg('已清空采点')
-                      }}
-                    >
-                      清空采点 ({samples.length})
-                    </button>
-                  </div>
-                  {samples.length > 0 && (
-                    <ul className="lm-samples">
-                      {samples.map((s, i) => (
-                        <li key={`${s.lineIndex}-${s.playTimeMs}-${i}`}>
-                          #{(s.lineIndex ?? 0) + 1} LRC {formatTime(s.lyricTimeMs / 1000)} → 播放{' '}
-                          {formatTime(s.playTimeMs / 1000)}
-                          {s.text ? ` · ${s.text.slice(0, 16)}` : ''}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+              <div className="theme-field">
+                <span>采点估算（建议 3～4 点）· 右栏点行采点，右键撤销</span>
+                <div className="panel-tools">
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={!hasLines || samples.length < 2}
+                    onClick={() => {
+                      applyFitFromSamples(samples, true)
+                      markDirty()
+                    }}
+                  >
+                    用当前点重新计算
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    disabled={!samples.length}
+                    onClick={() => {
+                      setSamples([])
+                      markDirty()
+                      setMsg('已清空采点')
+                    }}
+                  >
+                    清空采点 ({samples.length})
+                  </button>
                 </div>
-              </>
+                {samples.length > 0 && (
+                  <ul className="lm-samples">
+                    {samples.map((s, i) => (
+                      <li key={`${s.lineIndex}-${s.playTimeMs}-${i}`}>
+                        #{(s.lineIndex ?? 0) + 1} LRC {formatTime(s.lyricTimeMs / 1000)} → 播放{' '}
+                        {formatTime(s.playTimeMs / 1000)}
+                        {s.text ? ` · ${s.text.slice(0, 16)}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             ) : (
               <div className="theme-field">
                 <span>
                   逐句对点 · 已标 {stampedLines.length}/{originLines?.length || 0} · 目标第 {lineCursor + 1}{' '}
                   句
                 </span>
-                <p className="theme-tip">右栏左键钉时间，右键撤销该句；也可点下方按钮。</p>
+                <p className="theme-tip">
+                  右栏左键钉时间，右键撤销；上方偏移/倍率对全部句子整体生效。
+                </p>
                 <div className="panel-tools">
                   <button
                     type="button"
@@ -890,12 +1155,11 @@ export default function LyricsMatchDrawer({
                         setMsg('已清空逐句时间，请重新对点')
                         return
                       }
-                      const base = transformLyricLines(originLines, { offsetMs, rate })
-                      setLineTimes(base.map((l) => l.timeMs))
+                      setLineTimes(originLines.map((l) => l.timeMs))
                       setStampedLines([])
                       setLineCursor(0)
                       markDirty()
-                      setMsg('已重置逐句时间（回到当前偏移/速率）')
+                      setMsg('已重置逐句时间（回到原始 LRC；偏移/倍率仍生效）')
                     }}
                   >
                     重置逐句

@@ -21,6 +21,8 @@ import {
   addMusicRoot,
   backgroundFileUrl,
   importBackgroundImage,
+  importBgRotateImage,
+  listBgRotateRels,
   loadCategories,
   loadGains,
   loadHotkeys,
@@ -29,6 +31,11 @@ import {
   loadRoots,
   loadTheme,
   loadTracks,
+  loadWorkbenchTags,
+  addWorkbenchTag,
+  removeWorkbenchTag,
+  setTrackWorkbenchTags,
+  removeBgRotateImage,
   removeMusicRoot,
   resolveLyricsRootAbsolute,
   resolveRootAbsolute,
@@ -39,10 +46,13 @@ import {
   saveLyricsRoot,
   saveTheme,
   saveTracks,
+  tickBgRotate,
 } from './store'
+import { mergeBgRotate } from '../core/library-model'
 import {
   applyFilenameMetaToAll,
   applyFilenameMetaVerified,
+  backfillTrackFileTimes,
   importAudioFile,
   renameTrackFile,
   rescanAllRoots,
@@ -239,10 +249,9 @@ function dispatchHotkeyAction(action: HotkeyAction, opts?: { assumeFocused?: boo
     return
   }
   if (action === 'toggle-desktop-lyrics') {
+    // 快捷键仅显隐；显示即锁定（未锁/锁定由独立锁定快捷键控制）
     const theme = loadTheme(boot.dataDir)
-    const cfg = readConfig(boot.configPath)
-    const mode = cfg.desktopLyricsTripleCycle === false ? 'two' : 'three'
-    const step = nextDesktopLyricsCycle(theme.desktopLyrics, mode)
+    const step = nextDesktopLyricsCycle(theme.desktopLyrics, 'two')
     const next = {
       ...theme,
       desktopLyrics: mergeDesktopLyrics({
@@ -536,6 +545,7 @@ function createWindow() {
     clearTimeout(showFallback)
     log('createWindow:ready-to-show')
     win.center()
+    ensureWindowOnScreen(win)
     // 勿用临时 alwaysOnTop：Windows 上关闭后常残留置顶感，未点本窗前其它窗无法盖住
     win.show()
     win.focus()
@@ -569,13 +579,18 @@ function createWindow() {
     if (mainWindow === win) mainWindow = null
     log('window:closed')
   })
-  // 切到其他软件再回来时，通知渲染进程刷新拖动命中区
+  // 切到其他软件再回来时，通知渲染进程刷新按钮态（拖拽区重挂载由渲染进程仅在失焦→聚焦时做）
   win.on('focus', () => notifyChromeRefresh(win))
+  win.on('maximize', () => notifyChromeRefresh(win))
+  win.on('unmaximize', () => notifyChromeRefresh(win))
+  win.on('moved', () => ensureWindowOnScreen(win))
   win.on('restore', () => {
+    ensureWindowOnScreen(win)
     notifyChromeRefresh(win)
     void syncDesktopLyricsWindow().catch(() => undefined)
   })
   win.on('show', () => {
+    ensureWindowOnScreen(win)
     notifyChromeRefresh(win)
     void syncDesktopLyricsWindow().catch(() => undefined)
   })
@@ -600,6 +615,23 @@ function getWin(event: Electron.IpcMainInvokeEvent | Electron.IpcMainEvent) {
   return BrowserWindow.fromWebContents(event.sender)
 }
 
+/** 保证标题栏至少有一块落在当前显示器工作区内，避免拖飞后拖不回来 */
+function ensureWindowOnScreen(win: BrowserWindow) {
+  if (win.isDestroyed() || win.isMinimized() || win.isMaximized() || win.isFullScreen()) return
+  const b = win.getBounds()
+  const wa = screen.getDisplayNearestPoint({ x: b.x + Math.round(b.width / 2), y: b.y + 20 }).workArea
+  const minVisibleX = 100
+  const titleBar = 40
+  let { x, y } = b
+  if (x + b.width < wa.x + minVisibleX) x = wa.x + minVisibleX - b.width
+  if (x > wa.x + wa.width - minVisibleX) x = wa.x + wa.width - minVisibleX
+  if (y + titleBar < wa.y) y = wa.y
+  if (y > wa.y + wa.height - titleBar) y = wa.y + wa.height - titleBar
+  if (x !== b.x || y !== b.y) {
+    win.setBounds({ x, y, width: b.width, height: b.height }, false)
+  }
+}
+
 /** JS 拖窗：切走再回来 CSS drag 会失效，故用主进程读光标 + 锁定宽高 */
 type DragState = {
   win: BrowserWindow
@@ -608,18 +640,139 @@ type DragState = {
   width: number
   height: number
   timer: ReturnType<typeof setInterval>
+  /** wait-max：最大化按下后等光标移动再还原；arming：正在 unmaximize；normal：跟手拖 */
+  mode: 'wait-max' | 'arming' | 'normal'
+  startX: number
+  startY: number
 }
 let activeDrag: DragState | null = null
+const MAX_DRAG_SLOP_PX = 6
 
 function stopWindowDrag() {
   if (activeDrag?.timer) clearInterval(activeDrag.timer)
   activeDrag = null
 }
 
+function placeRestoredUnderCursor(win: BrowserWindow, cursor: { x: number; y: number }) {
+  const maxBounds = win.getBounds()
+  const wa = screen.getDisplayMatching(maxBounds).workArea
+  let normal: { x: number; y: number; width: number; height: number }
+  try {
+    normal = win.getNormalBounds()
+  } catch {
+    normal = { x: wa.x + 80, y: wa.y + 80, width: 1100, height: 720 }
+  }
+  const [minW, minH] = win.getMinimumSize()
+  let width = Math.max(minW || 800, normal.width || 1100)
+  let height = Math.max(minH || 560, normal.height || 720)
+  // 无边框下 getNormalBounds 有时仍接近工作区，看起来像「还原了但仍是全屏」
+  if (width >= wa.width - 8 && height >= wa.height - 8) {
+    width = Math.max(minW || 800, Math.min(1100, Math.round(wa.width * 0.72)))
+    height = Math.max(minH || 560, Math.min(720, Math.round(wa.height * 0.72)))
+  }
+  const ratioX =
+    maxBounds.width > 0 ? Math.min(1, Math.max(0, (cursor.x - maxBounds.x) / maxBounds.width)) : 0.5
+  const titleGrabY = 20
+  const x = Math.round(cursor.x - width * ratioX)
+  const y = Math.round(cursor.y - titleGrabY)
+  return { x, y, width, height, ox: cursor.x - x, oy: cursor.y - y }
+}
+
+function tickWindowDrag() {
+  if (!activeDrag || activeDrag.win.isDestroyed()) {
+    stopWindowDrag()
+    return
+  }
+  const drag = activeDrag
+  const win = drag.win
+  const c = screen.getCursorScreenPoint()
+
+  if (drag.mode === 'wait-max') {
+    if (Math.hypot(c.x - drag.startX, c.y - drag.startY) < MAX_DRAG_SLOP_PX) return
+    if (!win.isMaximized()) {
+      // 已非最大化：直接按当前尺寸拖
+      const b = win.getBounds()
+      drag.ox = c.x - b.x
+      drag.oy = c.y - b.y
+      drag.width = b.width
+      drag.height = b.height
+      drag.mode = 'normal'
+      return
+    }
+    const placed = placeRestoredUnderCursor(win, c)
+    drag.ox = placed.ox
+    drag.oy = placed.oy
+    drag.width = placed.width
+    drag.height = placed.height
+    drag.mode = 'arming'
+
+    const applyRestored = () => {
+      if (!activeDrag || activeDrag !== drag || win.isDestroyed()) return
+      if (drag.mode === 'normal') return
+      if (win.isMaximized()) win.unmaximize()
+      const now = screen.getCursorScreenPoint()
+      // ox/oy 在仍最大化时已按「还原尺寸 + 光标比例」算好；此处只落位
+      win.setBounds(
+        {
+          x: Math.round(now.x - drag.ox),
+          y: Math.round(now.y - drag.oy),
+          width: drag.width,
+          height: drag.height,
+        },
+        false,
+      )
+      drag.mode = 'normal'
+      notifyChromeRefresh(win)
+    }
+
+    win.once('unmaximize', () => {
+      // 等系统真正退出最大化后再 setBounds，否则 Windows 会忽略移动
+      setImmediate(applyRestored)
+    })
+    win.unmaximize()
+    // 个别环境不触发 unmaximize 事件：超时兜底
+    setTimeout(() => {
+      if (activeDrag === drag && drag.mode === 'arming') applyRestored()
+    }, 40)
+    return
+  }
+
+  if (drag.mode !== 'normal') return
+
+  win.setBounds(
+    {
+      x: Math.round(c.x - drag.ox),
+      y: Math.round(c.y - drag.oy),
+      width: drag.width,
+      height: drag.height,
+    },
+    false,
+  )
+}
+
+/**
+ * 最大化时：先进入 wait-max，光标移出阈值后再 unmaximize，并等事件后再 setBounds 跟手。
+ * （按下瞬间 unmaximize + setBounds 在 Win 上常被忽略；渲染进程 blur 也会误结束拖拽。）
+ */
 function startWindowDrag(win: BrowserWindow) {
   stopWindowDrag()
-  if (win.isMaximized()) win.unmaximize()
   const cursor = screen.getCursorScreenPoint()
+
+  if (win.isMaximized()) {
+    activeDrag = {
+      win,
+      ox: 0,
+      oy: 0,
+      width: 0,
+      height: 0,
+      mode: 'wait-max',
+      startX: cursor.x,
+      startY: cursor.y,
+      timer: setInterval(() => tickWindowDrag(), 4),
+    }
+    return
+  }
+
   const b = win.getBounds()
   activeDrag = {
     win,
@@ -627,22 +780,10 @@ function startWindowDrag(win: BrowserWindow) {
     oy: cursor.y - b.y,
     width: b.width,
     height: b.height,
-    timer: setInterval(() => {
-      if (!activeDrag || activeDrag.win.isDestroyed()) {
-        stopWindowDrag()
-        return
-      }
-      const c = screen.getCursorScreenPoint()
-      activeDrag.win.setBounds(
-        {
-          x: Math.round(c.x - activeDrag.ox),
-          y: Math.round(c.y - activeDrag.oy),
-          width: activeDrag.width,
-          height: activeDrag.height,
-        },
-        false,
-      )
-    }, 4),
+    mode: 'normal',
+    startX: cursor.x,
+    startY: cursor.y,
+    timer: setInterval(() => tickWindowDrag(), 4),
   }
 }
 
@@ -766,7 +907,7 @@ log('boot-early', {
 })
 
 if (isPrimaryInstance) {
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   log('app:ready', {
     userData: app.getPath('userData'),
     music: defaultMusicDir(),
@@ -860,7 +1001,108 @@ app.whenReady().then(() => {
     return themePayload()
   })
 
+  const bgRotatePayload = () => {
+    const theme = loadTheme(boot.dataDir)
+    const rotate = mergeBgRotate(theme.bgRotate)
+    const items = listBgRotateRels(boot.dataDir, rotate.order).map((rel) => {
+      const abs = backgroundFileUrl(boot.dataDir, rel)
+      return {
+        rel,
+        name: path.basename(rel),
+        url: abs ? toMediaUrl(abs) : '',
+      }
+    })
+    return { items, ...themePayload() }
+  }
+
+  ipcMain.handle('theme:listBgRotate', () => bgRotatePayload())
+
+  ipcMain.handle('theme:addBgRotate', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '添加轮换背景图（可多选）',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }],
+    })
+    if (result.canceled || !result.filePaths.length) return bgRotatePayload()
+    const theme = loadTheme(boot.dataDir)
+    const rotate = mergeBgRotate(theme.bgRotate)
+    const added: string[] = []
+    for (const p of result.filePaths) {
+      added.push(importBgRotateImage(boot.dataDir, p))
+    }
+    const disk = listBgRotateRels(boot.dataDir, [])
+    const order = [...rotate.order.filter((r) => disk.includes(r)), ...added.filter((r) => !rotate.order.includes(r))]
+    const next = {
+      ...theme,
+      bgStyle: 'rotate' as const,
+      bgImageRel:
+        theme.bgImageRel && disk.includes(theme.bgImageRel) ? theme.bgImageRel : added[0] || null,
+      bgRotate: mergeBgRotate({
+        ...rotate,
+        order,
+        lastSwitchedAt: rotate.lastSwitchedAt || Date.now(),
+      }),
+    }
+    saveTheme(boot.dataDir, next)
+    return bgRotatePayload()
+  })
+
+  ipcMain.handle('theme:removeBgRotate', (_e, rel: string) => {
+    const target = String(rel || '')
+    removeBgRotateImage(boot.dataDir, target)
+    const theme = loadTheme(boot.dataDir)
+    const rotate = mergeBgRotate(theme.bgRotate)
+    const order = rotate.order.filter((r) => r !== target)
+    const rels = listBgRotateRels(boot.dataDir, order)
+    let bgImageRel = theme.bgImageRel
+    if (bgImageRel === target || (bgImageRel && !rels.includes(bgImageRel))) {
+      bgImageRel = rels[0] || null
+    }
+    saveTheme(boot.dataDir, {
+      ...theme,
+      bgImageRel,
+      bgRotate: mergeBgRotate({
+        ...rotate,
+        order: rels,
+        lastSwitchedAt: Date.now(),
+      }),
+    })
+    return bgRotatePayload()
+  })
+
+  ipcMain.handle('theme:reorderBgRotate', (_e, order: string[]) => {
+    const theme = loadTheme(boot.dataDir)
+    const rotate = mergeBgRotate(theme.bgRotate)
+    const disk = listBgRotateRels(boot.dataDir, [])
+    const nextOrder = Array.isArray(order)
+      ? order.filter((r) => typeof r === 'string' && disk.includes(r))
+      : rotate.order
+    for (const r of disk) {
+      if (!nextOrder.includes(r)) nextOrder.push(r)
+    }
+    saveTheme(boot.dataDir, {
+      ...theme,
+      bgRotate: mergeBgRotate({ ...rotate, order: nextOrder }),
+    })
+    return bgRotatePayload()
+  })
+
+  ipcMain.handle('theme:tickBgRotate', () => {
+    const { changed } = tickBgRotate(boot.dataDir)
+    return { changed, ...themePayload() }
+  })
+
   ipcMain.handle('library:get', () => libraryPayload())
+
+  ipcMain.handle('workbenchTags:get', () => loadWorkbenchTags(boot.dataDir))
+  ipcMain.handle('workbenchTags:add', (_e, name: string) => addWorkbenchTag(boot.dataDir, String(name || '')))
+  ipcMain.handle('workbenchTags:remove', (_e, tagId: string) =>
+    removeWorkbenchTag(boot.dataDir, String(tagId || '')),
+  )
+  ipcMain.handle('workbenchTags:setTrack', (_e, trackId: string, tagIds: string[]) =>
+    setTrackWorkbenchTags(boot.dataDir, String(trackId || ''), Array.isArray(tagIds) ? tagIds : []),
+  )
+
   ipcMain.handle('library:addRoot', async () => {
     const result = await dialog.showOpenDialog({
       title: '添加音乐根目录（可多选多个文件夹，会合并进总曲库）',
@@ -1349,6 +1591,12 @@ app.whenReady().then(() => {
   )
 
   try {
+    // 老曲库补齐文件时间（仅缺失时做一次 stat），保证首页「修改/创建时间」排序可用
+    await backfillTrackFileTimes(boot.dataDir)
+      .then((changed) => {
+        if (changed) log('library:backfilled file times')
+      })
+      .catch((err) => log('backfill file times failed', err instanceof Error ? err : String(err)))
     setupTrayAndHotkeys()
     createWindow()
   } catch (err) {

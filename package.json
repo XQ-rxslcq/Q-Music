@@ -1,7 +1,7 @@
 {
   "name": "qmusic",
   "productName": "Q-Music",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "private": true,
   "author": "Q-Music",
   "description": "Q-Music portable player",

@@ -219,8 +219,17 @@ function classifyDigitAccelRisk(accel: string): 'bare-ctrl-digit' | 'digit-combo
   return 'digit-combo'
 }
 
+/**
+ * 只依赖 key / code 的最小事件形状：
+ * 原生 KeyboardEvent 与 React 合成事件（React.KeyboardEvent）都可直接传入。
+ */
+export type KeyboardEventLike = {
+  key: string
+  code?: string
+}
+
 /** 从键盘事件解析 Electron accelerator 主键（区分顶行数字与小键盘） */
-export function keyTokenFromKeyboardEvent(e: KeyboardEvent): string | null {
+export function keyTokenFromKeyboardEvent(e: KeyboardEventLike): string | null {
   if (['Control', 'Alt', 'Shift', 'Meta'].includes(e.key)) return null
   if (e.code?.startsWith('Numpad') && /\d$/.test(e.code)) {
     return `num${e.code.slice('Numpad'.length)}`

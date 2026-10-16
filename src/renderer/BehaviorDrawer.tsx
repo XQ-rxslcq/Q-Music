@@ -99,9 +99,11 @@ export default function BehaviorDrawer({ open, onClose, onNotify, onBehaviorChan
                 })
               }}
             />
-            桌面歌词三态循环（显示 → 锁定 → 隐藏）
+            桌面歌词按钮三态循环（显示 → 锁定 → 隐藏）
           </label>
-          <p className="theme-tip">关闭后按钮与快捷键只在「显示 / 隐藏」间切换。</p>
+          <p className="theme-tip">
+            仅影响界面按钮；快捷键始终只显隐，显示即锁定（锁定另有快捷键）。关闭后按钮也改为两态。
+          </p>
 
           <div className="theme-field">
             <span>数据目录（qmdata）</span>

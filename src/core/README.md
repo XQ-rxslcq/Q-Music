@@ -10,6 +10,7 @@
 | name | type | size | created | modified | notes |
 |------|------|------|---------|----------|-------|
 | app-paths.ts | file | 6.5 KB | 2026-09-08 | 2026-09-11 | |
+| bg-rotate.ts | file | 1.6 KB | 2026-10-15 | 2026-10-15 | 背景轮换间隔/下一张 |
 | desktop-lyrics.ts | file | 12.8 KB | 2026-09-09 | 2026-09-16 | |
 | filename-meta.ts | file | 7.5 KB | 2026-09-08 | 2026-09-10 | |
 | format.ts | file | 813 B | 2026-09-08 | 2026-09-10 | |
@@ -19,7 +20,9 @@
 | instance-identity.ts | file | 943 B | 2026-09-10 | 2026-09-10 | |
 | library.ts | file | 2.0 KB | 2026-09-08 | 2026-09-10 | |
 | library-model.ts | file | 3.8 KB | 2026-09-08 | 2026-09-10 | |
+| library-sort.ts | file | 1.8 KB | 2026-10-15 | 2026-10-15 | 曲库列表排序 |
 | lyrics.ts | file | 14.3 KB | 2026-09-08 | 2026-09-10 | |
+| lyric-follow.ts | file | 1.5 KB | 2026-10-15 | 2026-10-15 | 详情页歌词居中跟随 / 中心带宽 |
 | lyric-seek.ts | file | 547 B | 2026-09-09 | 2026-09-10 | |
 | media-url.ts | file | 406 B | 2026-09-08 | 2026-09-10 | |
 | paths.ts | file | 664 B | 2026-09-08 | 2026-09-10 | |
@@ -30,4 +33,5 @@
 | trim.ts | file | 1.6 KB | 2026-09-08 | 2026-09-10 | |
 | volume.ts | file | 2.2 KB | 2026-09-08 | 2026-09-16 | |
 | window-title.ts | file | 2.0 KB | 2026-09-10 | 2026-09-10 | |
+| workbench-tags.ts | file | 2.8 KB | 2026-10-15 | 2026-10-15 | 歌词工作台标签/筛选 |
 <!-- INDEX-END -->

@@ -8,13 +8,16 @@ Vitest 套件，门禁：`npm test`（见 [docs/testing.md](../docs/testing.md)�
 | name | type | size | created | modified | notes |
 |------|------|------|---------|----------|-------|
 | app-icon.test.ts | file | 1.3 KB | 2026-09-09 | 2026-09-10 | |
+| bg-rotate.test.ts | file | 1.1 KB | 2026-10-15 | 2026-10-15 | 背景轮换纯逻辑 |
 | app-paths.test.ts | file | 3.4 KB | 2026-09-08 | 2026-09-11 | |
 | desktop-lyrics.test.ts | file | 5.0 KB | 2026-09-09 | 2026-09-10 | |
 | filename-meta.test.ts | file | 2.2 KB | 2026-09-08 | 2026-09-10 | |
 | fixtures-lyrics.test.ts | file | 940 B | 2026-09-08 | 2026-09-10 | |
 | format.test.ts | file | 842 B | 2026-09-08 | 2026-09-10 | |
 | instance-slot.test.ts | file | 1013 B | 2026-09-10 | 2026-09-10 | |
+| library-sort.test.ts | file | 1.5 KB | 2026-10-15 | 2026-10-15 | 曲库排序（歌手/歌名/修改/创建 + 正逆序） |
 | library.test.ts | file | 2.1 KB | 2026-09-08 | 2026-09-10 | |
+| lyric-follow.test.ts | file | 0.9 KB | 2026-10-15 | 2026-10-15 | 详情页歌词跟随带宽 |
 | lyrics.test.ts | file | 8.4 KB | 2026-09-08 | 2026-09-10 | |
 | media-url.test.ts | file | 499 B | 2026-09-08 | 2026-09-10 | |
 | paths.test.ts | file | 572 B | 2026-09-08 | 2026-09-10 | |
@@ -24,6 +27,7 @@ Vitest 套件，门禁：`npm test`（见 [docs/testing.md](../docs/testing.md)�
 | trim.test.ts | file | 1.1 KB | 2026-09-08 | 2026-09-10 | |
 | ux-extras.test.ts | file | 5.2 KB | 2026-09-09 | 2026-09-16 | |
 | volume.test.ts | file | 1.3 KB | 2026-09-08 | 2026-09-10 | |
+| workbench-tags.test.ts | file | 1.4 KB | 2026-10-15 | 2026-10-15 | 工作台标签筛选 |
 | window-title.test.ts | file | 1.0 KB | 2026-09-10 | 2026-09-10 | |
 | fixtures | dir | - | 2026-09-08 | 2026-09-08 | |
 <!-- INDEX-END -->

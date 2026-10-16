@@ -61,13 +61,14 @@ function IconClose() {
 }
 
 /**
- * 使用主进程读光标拖窗（不用 -webkit-app-region）。
- * Windows 无边框在 Alt+Tab / 切软件后再回来时，CSS drag 经常失效；
- * JS 拖窗不受影响。
+ * 标题栏拖拽用系统 `-webkit-app-region: drag`（含最大化拖拽还原）。
+ * 切走再回来偶发失效时，仅在「失焦后再聚焦」时重挂载；勿在 maximize/unmaximize
+ * 时重挂载，否则会打断正在进行的原生拖拽，窗口易甩出屏外且之后拖不动。
  */
 export default function TitleBar({ menuOpen, onToggleMenu, menu, brandName = 'Q-Music' }: Props) {
   const [maximized, setMaximized] = useState(false)
-  const dragging = useRef(false)
+  const [dragEpoch, setDragEpoch] = useState(0)
+  const wasBlurred = useRef(false)
   const api = window.qmusic
 
   useEffect(() => {
@@ -83,39 +84,26 @@ export default function TitleBar({ menuOpen, onToggleMenu, menu, brandName = 'Q-
   }, [api])
 
   useEffect(() => {
-    const end = () => {
-      if (!dragging.current) return
-      dragging.current = false
-      window.qmusic?.windowDragEnd?.()
+    const onBlur = () => {
+      wasBlurred.current = true
     }
-    window.addEventListener('pointerup', end)
-    window.addEventListener('pointercancel', end)
-    window.addEventListener('blur', end)
+    const onFocus = () => {
+      if (!wasBlurred.current) return
+      wasBlurred.current = false
+      // 等焦点稳定后再挂载，避免拖拽过程中拆掉 drag 区
+      window.setTimeout(() => setDragEpoch((n) => n + 1), 80)
+    }
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('focus', onFocus)
     return () => {
-      window.removeEventListener('pointerup', end)
-      window.removeEventListener('pointercancel', end)
-      window.removeEventListener('blur', end)
+      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('focus', onFocus)
     }
   }, [])
 
   return (
     <div className="titlebar">
-      <div
-        className="titlebar-drag"
-        onPointerDown={(e) => {
-          if (!api?.windowDragStart || e.button !== 0) return
-          dragging.current = true
-          setMaximized(false)
-          api.windowDragStart()
-        }}
-        onDoubleClick={async () => {
-          if (!api) return
-          dragging.current = false
-          api.windowDragEnd?.()
-          const next = await api.windowToggleMaximize()
-          setMaximized(next)
-        }}
-      >
+      <div key={dragEpoch} className="titlebar-drag">
         <span className="titlebar-brand">{brandName}</span>
       </div>
       <div className="titlebar-actions">

@@ -10,9 +10,13 @@ import {
   LYRIC_FONT_GROUPS,
   detectLyricLang,
   desktopLyricsFromPage,
+  dualLaneAssignment,
+  karaokeGradientAngle,
   lyricScrollOffset,
   mergeDesktopLyrics,
+  oppositeLineSlot,
   pageLyricsFromDesktop,
+  primarySlotForDual,
   resolveLyricFont,
   type DesktopLyricsSettings,
 } from '../src/core/desktop-lyrics'
@@ -128,6 +132,54 @@ describe('global hotkey map', () => {
     for (const b of GLOBAL_HOTKEY_MAP) {
       expect(b.accel.startsWith('CommandOrControl+Alt+')).toBe(true)
     }
+  })
+})
+
+describe('dual-lane / opposite / karaoke axis', () => {
+  it('assigns even/odd lines to primary/secondary without promoting secondary up', () => {
+    expect(dualLaneAssignment(0, 4)).toEqual({
+      primaryIndex: 0,
+      secondaryIndex: 1,
+      primaryOn: true,
+      secondaryOn: false,
+    })
+    expect(dualLaneAssignment(1, 4)).toEqual({
+      primaryIndex: 2,
+      secondaryIndex: 1,
+      primaryOn: false,
+      secondaryOn: true,
+    })
+    expect(dualLaneAssignment(2, 4)).toEqual({
+      primaryIndex: 2,
+      secondaryIndex: 3,
+      primaryOn: true,
+      secondaryOn: false,
+    })
+  })
+
+  it('flips secondary align and forces diagonal when primary is centered', () => {
+    const p = primarySlotForDual({ alignX: 'center', alignY: 'center', offsetX: 0, offsetY: 0 })
+    expect(p).toMatchObject({ alignX: 'start', alignY: 'start' })
+    expect(oppositeLineSlot(p)).toMatchObject({ alignX: 'end', alignY: 'end' })
+    expect(oppositeLineSlot({ alignX: 'start', alignY: 'center', offsetX: 4, offsetY: 0 })).toMatchObject({
+      alignX: 'end',
+      alignY: 'center',
+      offsetX: -4,
+    })
+  })
+
+  it('vertical top-bottom preset separates columns (no same-column stack)', () => {
+    const topBottom = { alignX: 'center' as const, alignY: 'start' as const, offsetX: 0, offsetY: 6 }
+    const p = primarySlotForDual(topBottom, 'vertical')
+    const s = oppositeLineSlot(p, 'vertical')
+    expect(p.alignX).toBe('start')
+    expect(s.alignX).toBe('end')
+    expect(s.alignY).toBe('end')
+  })
+
+  it('uses top-to-bottom karaoke gradient when vertical', () => {
+    expect(karaokeGradientAngle('horizontal')).toBe('90deg')
+    expect(karaokeGradientAngle('vertical')).toBe('180deg')
   })
 })
 

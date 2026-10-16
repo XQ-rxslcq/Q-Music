@@ -9,6 +9,7 @@ import {
   type ThemeSettings,
   type TrackRecord,
   resolveBackgroundsDir,
+  resolveBgRotateDir,
   resolveCategoriesPath,
   resolveGainsPath,
   resolveHotkeysPath,
@@ -17,10 +18,19 @@ import {
   resolveRootsPath,
   resolveThemePath,
   resolveTracksPath,
+  resolveWorkbenchTagsPath,
   libraryDataDirs,
+  mergeBgRotate,
   mergeDesktopLyrics,
   mergePageLyrics,
 } from '../core/library'
+import { isBgRotateDue, nextBgRotateRel, orderBgRotateRels } from '../core/bg-rotate'
+import {
+  makeWorkbenchTagId,
+  mergeWorkbenchTags,
+  type WorkbenchTag,
+  type WorkbenchTagsPayload,
+} from '../core/workbench-tags'
 import { fromRelativeToRoot, toRelativeIfUnderRoot } from '../core/app-paths'
 import { DEFAULT_HOTKEY_BINDINGS, mergeHotkeyBindings, type HotkeyBinding } from '../core/hotkey-config'
 
@@ -84,6 +94,56 @@ export function ensureLibraryLayout(dataDir: string) {
   if (!fs.existsSync(gains)) writeJson(gains, {})
   const hotkeys = resolveHotkeysPath(dataDir)
   if (!fs.existsSync(hotkeys)) writeJson(hotkeys, { bindings: DEFAULT_HOTKEY_BINDINGS })
+  const wbTags = resolveWorkbenchTagsPath(dataDir)
+  if (!fs.existsSync(wbTags)) writeJson(wbTags, { tags: [], byTrack: {} })
+}
+
+export function loadWorkbenchTags(dataDir: string): WorkbenchTagsPayload {
+  return mergeWorkbenchTags(readJson(resolveWorkbenchTagsPath(dataDir), { tags: [], byTrack: {} }))
+}
+
+export function saveWorkbenchTags(dataDir: string, payload: WorkbenchTagsPayload) {
+  writeJson(resolveWorkbenchTagsPath(dataDir), mergeWorkbenchTags(payload))
+}
+
+export function addWorkbenchTag(dataDir: string, name: string): WorkbenchTagsPayload {
+  const state = loadWorkbenchTags(dataDir)
+  const trimmed = String(name || '').trim()
+  if (!trimmed) return state
+  if (state.tags.some((t) => t.name === trimmed)) return state
+  const tag: WorkbenchTag = { id: makeWorkbenchTagId(), name: trimmed }
+  const next = { ...state, tags: [...state.tags, tag] }
+  saveWorkbenchTags(dataDir, next)
+  return next
+}
+
+export function removeWorkbenchTag(dataDir: string, tagId: string): WorkbenchTagsPayload {
+  const state = loadWorkbenchTags(dataDir)
+  const nextTags = state.tags.filter((t) => t.id !== tagId)
+  const byTrack: WorkbenchTagsPayload['byTrack'] = {}
+  for (const [tid, ids] of Object.entries(state.byTrack)) {
+    const cleaned = ids.filter((id) => id !== tagId)
+    if (cleaned.length) byTrack[tid] = cleaned
+  }
+  const next = { tags: nextTags, byTrack }
+  saveWorkbenchTags(dataDir, next)
+  return next
+}
+
+export function setTrackWorkbenchTags(
+  dataDir: string,
+  trackId: string,
+  tagIds: string[],
+): WorkbenchTagsPayload {
+  const state = loadWorkbenchTags(dataDir)
+  const allowed = new Set(state.tags.map((t) => t.id))
+  const cleaned = [...new Set(tagIds.filter((id) => allowed.has(id)))]
+  const byTrack = { ...state.byTrack }
+  if (cleaned.length) byTrack[trackId] = cleaned
+  else delete byTrack[trackId]
+  const next = { tags: state.tags, byTrack }
+  saveWorkbenchTags(dataDir, next)
+  return next
 }
 
 export function loadGains(appRoot: string): Record<string, number> {
@@ -99,11 +159,21 @@ export function loadTheme(appRoot: string): ThemeSettings {
     Partial<ThemeSettings> & {
       desktopLyrics?: Partial<ThemeSettings['desktopLyrics']>
       pageLyrics?: Partial<ThemeSettings['pageLyrics']>
+      bgRotate?: Partial<ThemeSettings['bgRotate']>
     }
   >(resolveThemePath(appRoot), {})
+  const bgStyle =
+    raw.bgStyle === 'gradient' ||
+    raw.bgStyle === 'flat' ||
+    raw.bgStyle === 'image' ||
+    raw.bgStyle === 'rotate'
+      ? raw.bgStyle
+      : DEFAULT_THEME.bgStyle
   return {
     ...DEFAULT_THEME,
     ...raw,
+    bgStyle,
+    bgRotate: mergeBgRotate(raw.bgRotate),
     desktopLyrics: mergeDesktopLyrics(raw.desktopLyrics),
     pageLyrics: mergePageLyrics(raw.pageLyrics),
   }
@@ -112,6 +182,7 @@ export function loadTheme(appRoot: string): ThemeSettings {
 export function saveTheme(appRoot: string, theme: ThemeSettings) {
   writeJson(resolveThemePath(appRoot), {
     ...theme,
+    bgRotate: mergeBgRotate(theme.bgRotate),
     desktopLyrics: mergeDesktopLyrics(theme.desktopLyrics),
     pageLyrics: mergePageLyrics(theme.pageLyrics),
   })
@@ -243,4 +314,93 @@ export function backgroundFileUrl(dataDir: string, bgImageRel: string | null): s
   }
   if (!fs.existsSync(abs)) return null
   return abs
+}
+
+const BG_ROTATE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
+
+/** 列出轮换池内图片（相对 qmdata；按 theme.bgRotate.order，其余按文件名） */
+export function listBgRotateRels(dataDir: string, order?: string[]): string[] {
+  const dir = resolveBgRotateDir(dataDir)
+  fs.mkdirSync(dir, { recursive: true })
+  let disk: string[] = []
+  try {
+    disk = fs
+      .readdirSync(dir)
+      .filter((name) => BG_ROTATE_EXTS.has(path.extname(name).toLowerCase()))
+      .map((name) => toRelativeIfUnderRoot(dataDir, path.join(dir, name)))
+  } catch {
+    return []
+  }
+  const themeOrder = order ?? mergeBgRotate(loadTheme(dataDir).bgRotate).order
+  return orderBgRotateRels(disk, themeOrder)
+}
+
+/** 复制一张图到 qmdata/bg-rotate，返回相对路径 */
+export function importBgRotateImage(dataDir: string, sourceAbs: string): string {
+  const dir = resolveBgRotateDir(dataDir)
+  fs.mkdirSync(dir, { recursive: true })
+  const ext = path.extname(sourceAbs) || '.jpg'
+  const base = path.basename(sourceAbs, ext).replace(/[^\w\u4e00-\u9fff.-]+/g, '_').slice(0, 40)
+  const name = `${base || 'bg'}-${Date.now()}${ext.toLowerCase()}`
+  const dest = path.join(dir, name)
+  fs.copyFileSync(sourceAbs, dest)
+  return toRelativeIfUnderRoot(dataDir, dest)
+}
+
+export function removeBgRotateImage(dataDir: string, rel: string): boolean {
+  if (!rel || rel.includes('..')) return false
+  const abs = path.resolve(fromRelativeToRoot(dataDir, rel))
+  const dir = path.resolve(resolveBgRotateDir(dataDir))
+  const prefix = dir.toLowerCase() + path.sep
+  if (!abs.toLowerCase().startsWith(prefix)) return false
+  try {
+    if (fs.existsSync(abs)) {
+      fs.unlinkSync(abs)
+      return true
+    }
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
+/**
+ * 若轮换已到期则切到下一张并写回 theme；未到期则原样返回。
+ * 返回是否发生了切换。
+ */
+export function tickBgRotate(dataDir: string, nowMs = Date.now()): { theme: ThemeSettings; changed: boolean } {
+  const theme = loadTheme(dataDir)
+  if (theme.bgStyle !== 'rotate') return { theme, changed: false }
+  const rels = listBgRotateRels(dataDir)
+  if (!rels.length) {
+    if (theme.bgImageRel) {
+      const next = { ...theme, bgImageRel: null }
+      saveTheme(dataDir, next)
+      return { theme: next, changed: true }
+    }
+    return { theme, changed: false }
+  }
+  const rotate = mergeBgRotate(theme.bgRotate)
+  const ordered = orderBgRotateRels(rels, rotate.order)
+  const due = isBgRotateDue(rotate.lastSwitchedAt, rotate.intervalSec, nowMs)
+  const currentOk = theme.bgImageRel && ordered.includes(theme.bgImageRel)
+  if (!due && currentOk) return { theme, changed: false }
+  const nextRel = due
+    ? nextBgRotateRel(ordered, theme.bgImageRel)
+    : theme.bgImageRel && ordered.includes(theme.bgImageRel)
+      ? theme.bgImageRel
+      : ordered[0]
+  if (!nextRel) return { theme, changed: false }
+  if (nextRel === theme.bgImageRel && currentOk && !due) return { theme, changed: false }
+  const next: ThemeSettings = {
+    ...theme,
+    bgImageRel: nextRel,
+    bgRotate: {
+      ...rotate,
+      order: ordered,
+      lastSwitchedAt: due || !currentOk ? nowMs : rotate.lastSwitchedAt,
+    },
+  }
+  saveTheme(dataDir, next)
+  return { theme: next, changed: true }
 }

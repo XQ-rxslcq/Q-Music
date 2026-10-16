@@ -11,9 +11,13 @@ import {
 import { findLyricIndex, type LyricLine } from '../core/lyrics'
 import {
   DEFAULT_DESKTOP_LYRICS,
+  dualLaneAssignment,
+  karaokeGradientAngle,
   karaokeLineProgress,
   lyricScrollOffset,
   mergeDesktopLyrics,
+  oppositeLineSlot,
+  primarySlotForDual,
   resolveLyricFont,
   type DesktopLyricsSettings,
   type LineSlot,
@@ -40,18 +44,22 @@ const empty: Payload = {
   playing: false,
 }
 
-function slotBoxStyle(slot: LineSlot, vertical: boolean): CSSProperties {
+function slotBoxStyle(slot: LineSlot, vertical: boolean, fontSize: number): CSSProperties {
   const ax = slot.alignX === 'start' ? '0%' : slot.alignX === 'end' ? '100%' : '50%'
   const ay = slot.alignY === 'start' ? '0%' : slot.alignY === 'end' ? '100%' : '50%'
   const tx = slot.alignX === 'start' ? '0%' : slot.alignX === 'end' ? '-100%' : '-50%'
   const ty = slot.alignY === 'start' ? '0%' : slot.alignY === 'end' ? '-100%' : '-50%'
+  // 纵向：列宽按字号限制，避免双行 90% 宽叠在一起
+  const colW = Math.max(28, Math.round(fontSize * 1.35))
   return {
     position: 'absolute',
     left: `calc(${ax} + ${slot.offsetX}%)`,
     top: `calc(${ay} + ${slot.offsetY}%)`,
     transform: `translate(${tx}, ${ty})`,
-    width: vertical ? '90%' : '92%',
-    maxWidth: vertical ? '90%' : '92%',
+    width: vertical ? `${colW}px` : '92%',
+    maxWidth: vertical ? '46%' : '92%',
+    height: vertical ? '92%' : undefined,
+    maxHeight: vertical ? '92%' : undefined,
     writingMode: vertical ? 'vertical-rl' : 'horizontal-tb',
     textOrientation: vertical ? 'mixed' : undefined,
     overflow: 'hidden',
@@ -67,6 +75,7 @@ function textPaintStyle(
   const size = settings.fontSize
   const weight = 500
   const shadow = settings.shadow ? '0 2px 10px rgba(0,0,0,0.65)' : 'none'
+  const angle = karaokeGradientAngle(settings.orientation)
   const stroke =
     settings.stroke && settings.strokeWidth > 0
       ? {
@@ -94,25 +103,25 @@ function textPaintStyle(
     const pct = Math.min(1, Math.max(0, progress)) * 100
     return {
       ...base,
-      backgroundImage: `linear-gradient(90deg, ${settings.sungColor} ${pct}%, ${settings.unsungColor} ${pct}%)`,
+      backgroundImage: `linear-gradient(${angle}, ${settings.sungColor} ${pct}%, ${settings.unsungColor} ${pct}%)`,
     }
   }
 
   if (settings.fillMode === 'gradient' && on) {
     return {
       ...base,
-      backgroundImage: `linear-gradient(90deg, ${settings.gradientFrom}, ${settings.gradientTo})`,
+      backgroundImage: `linear-gradient(${angle}, ${settings.gradientFrom}, ${settings.gradientTo})`,
     }
   }
 
   const fill = on ? settings.activeColor : settings.color
   return {
     ...base,
-    backgroundImage: `linear-gradient(90deg, ${fill} 0%, ${fill} 100%)`,
+    backgroundImage: `linear-gradient(${angle}, ${fill} 0%, ${fill} 100%)`,
   }
 }
 
-/** 视口内长句：进度点居中，整句右→左平移，尾部露全后停移 */
+/** 视口内长句：进度点居中；横向右←左 / 纵向上←下平移，尾部露全后停移 */
 function LyricScrollLine({
   text,
   settings,
@@ -163,7 +172,7 @@ function LyricScrollLine({
   const axis = vertical ? 'translateY' : 'translateX'
 
   return (
-    <div ref={viewRef} style={slotBoxStyle(slot, vertical)}>
+    <div ref={viewRef} style={slotBoxStyle(slot, vertical, settings.fontSize)}>
       <span
         ref={textRef}
         style={{
@@ -244,22 +253,57 @@ function App() {
 
   const rows = useMemo(() => {
     // 有歌词数据时：前奏 / 末句之后都不显示「暂无歌词」，末句后仍钉在最后一句
-    if (!lines.length) return [] as Array<{ text: string; on: boolean; slot: 'primary' | 'secondary' }>
+    type Row = {
+      text: string
+      on: boolean
+      slot: 'primary' | 'secondary'
+      lineIndex: number
+    }
+    if (!lines.length) return [] as Row[]
     const idx = active >= 0 ? active : 0
     const on = active >= 0
     if (settings.lineCount === 1) {
       const t = lines[idx]?.text || ''
-      return [{ text: t || '…', on, slot: 'primary' as const }]
+      return [{ text: t || '…', on, slot: 'primary' as const, lineIndex: idx }]
     }
-    const cur = lines[idx]?.text || ''
-    const next = lines[idx + 1]?.text
-    const out: Array<{ text: string; on: boolean; slot: 'primary' | 'secondary' }> = []
-    out.push({ text: cur || '…', on, slot: 'primary' })
-    if (next) out.push({ text: next, on: false, slot: 'secondary' })
+    const lane = dualLaneAssignment(idx, lines.length)
+    const out: Row[] = []
+    if (lane.primaryIndex != null) {
+      out.push({
+        text: lines[lane.primaryIndex]?.text || '…',
+        on: on && lane.primaryOn,
+        slot: 'primary',
+        lineIndex: lane.primaryIndex,
+      })
+    }
+    if (lane.secondaryIndex != null) {
+      out.push({
+        text: lines[lane.secondaryIndex]?.text || '…',
+        on: on && lane.secondaryOn,
+        slot: 'secondary',
+        lineIndex: lane.secondaryIndex,
+      })
+    }
     return out
   }, [lines, active, settings.lineCount])
 
   const vertical = settings.orientation === 'vertical'
+  const dualSlots = useMemo(() => {
+    if (settings.lineCount !== 2) {
+      return {
+        primary: settings.lineLayouts.primary,
+        secondary: settings.lineLayouts.secondary,
+      }
+    }
+    const orientation = settings.orientation === 'vertical' ? 'vertical' : 'horizontal'
+    const primary = primarySlotForDual(settings.lineLayouts.primary, orientation)
+    return { primary, secondary: oppositeLineSlot(primary, orientation) }
+  }, [
+    settings.lineCount,
+    settings.orientation,
+    settings.lineLayouts.primary,
+    settings.lineLayouts.secondary,
+  ])
   const unlocked = settings.locked === false
 
   const onPointerDown = (e: PointerEvent<HTMLDivElement>) => {
@@ -310,7 +354,7 @@ function App() {
       {rows.length === 0 ? (
         <div
           style={{
-            ...slotBoxStyle(settings.lineLayouts.primary, vertical),
+            ...slotBoxStyle(settings.lineLayouts.primary, vertical, settings.fontSize),
             ...textPaintStyle(settings, true, null),
             color: settings.activeColor,
             WebkitTextFillColor: settings.activeColor,
@@ -324,19 +368,25 @@ function App() {
           </span>
         </div>
       ) : (
-        rows.map((row) => (
-          <LyricScrollLine
-            key={`${row.slot}-${row.text}`}
-            text={row.text}
-            settings={settings}
-            on={row.on}
-            progress={row.on ? progress : null}
-            vertical={vertical}
-            slot={
-              row.slot === 'primary' ? settings.lineLayouts.primary : settings.lineLayouts.secondary
-            }
-          />
-        ))
+        rows.map((row) => {
+          const rowProgress =
+            row.on && row.lineIndex === active
+              ? progress
+              : row.on
+                ? karaokeLineProgress(lines, row.lineIndex, clock, duration)
+                : null
+          return (
+            <LyricScrollLine
+              key={`${row.slot}-${row.lineIndex}`}
+              text={row.text}
+              settings={settings}
+              on={row.on}
+              progress={rowProgress}
+              vertical={vertical}
+              slot={row.slot === 'primary' ? dualSlots.primary : dualSlots.secondary}
+            />
+          )
+        })
       )}
     </div>
   )

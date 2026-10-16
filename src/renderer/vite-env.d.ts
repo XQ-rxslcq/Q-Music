@@ -19,6 +19,9 @@ export type Track = {
   rootId?: string
   pathRel?: string
   titleDisplay?: TitleDisplaySettings
+  addedAt?: string
+  mtimeMs?: number
+  birthtimeMs?: number
 }
 
 export type PlayMode = 'sequence' | 'loop' | 'single' | 'shuffle'
@@ -28,12 +31,16 @@ export type ThemeSettings = {
   accent: string
   panelOpacity: number
   lowOpacityTextStroke: boolean
-  bgStyle: 'gradient' | 'flat' | 'image'
+  bgStyle: 'gradient' | 'flat' | 'image' | 'rotate'
   flatColor: string
   bgImageRel: string | null
+  bgRotate: { intervalSec: number; lastSwitchedAt: number; order: string[] }
   desktopLyrics: DesktopLyricsSettings
   pageLyrics: PageLyricsSettings
 }
+
+export type BgRotateItem = { rel: string; name: string; url: string }
+export type BgRotatePayload = ThemePayload & { items: BgRotateItem[] }
 
 export type MusicRoot = { id: string; path: string; label: string; addedAt: string }
 export type Category = { id: string; name: string }
@@ -120,7 +127,19 @@ export type QMusicApi = {
   getTheme: () => Promise<ThemePayload>
   setTheme: (theme: ThemeSettings) => Promise<ThemePayload>
   pickBackground: () => Promise<ThemePayload>
+  listBgRotate: () => Promise<BgRotatePayload>
+  addBgRotate: () => Promise<BgRotatePayload>
+  removeBgRotate: (rel: string) => Promise<BgRotatePayload>
+  reorderBgRotate: (order: string[]) => Promise<BgRotatePayload>
+  tickBgRotate: () => Promise<ThemePayload & { changed: boolean }>
   getLibrary: () => Promise<LibraryPayload>
+  getWorkbenchTags: () => Promise<{ tags: { id: string; name: string }[]; byTrack: Record<string, string[]> }>
+  addWorkbenchTag: (name: string) => Promise<{ tags: { id: string; name: string }[]; byTrack: Record<string, string[]> }>
+  removeWorkbenchTag: (tagId: string) => Promise<{ tags: { id: string; name: string }[]; byTrack: Record<string, string[]> }>
+  setTrackWorkbenchTags: (
+    trackId: string,
+    tagIds: string[],
+  ) => Promise<{ tags: { id: string; name: string }[]; byTrack: Record<string, string[]> }>
   addMusicRoot: () => Promise<LibraryPayload>
   removeMusicRoot: (rootId: string) => Promise<LibraryPayload>
   openMusicRoot: (rootId: string) => Promise<string>

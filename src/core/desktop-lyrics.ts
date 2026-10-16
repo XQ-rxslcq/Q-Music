@@ -111,7 +111,7 @@ export function nextDesktopLyricsCycle(
 
   if (mode === 'two') {
     if (!visible) {
-      return { visible: true, locked: true, toast: '桌面歌词：已显示' }
+      return { visible: true, locked: true, toast: '桌面歌词：已显示（锁定）' }
     }
     return { visible: false, locked: true, toast: '桌面歌词：已隐藏' }
   }
@@ -265,6 +265,95 @@ export function resolveLyricFont(
   const lang = detectLyricLang(text)
   const map = settings.fonts || DEFAULT_LYRIC_FONTS
   return map[lang] || settings.fontFamily || DEFAULT_LYRIC_FONTS[lang]
+}
+
+/** 翻转对齐：start↔end，center 不变 */
+export function flipAlign(a: LineSlotAlign): LineSlotAlign {
+  if (a === 'start') return 'end'
+  if (a === 'end') return 'start'
+  return 'center'
+}
+
+/**
+ * 双行第二行反向对齐。
+ * - 横向：左右对位（主左→次右）
+ * - 纵向：左右分列 + 上下对位（主左上→次右下），避免同列重叠
+ */
+export function oppositeLineSlot(
+  primary: LineSlot,
+  orientation: 'horizontal' | 'vertical' = 'horizontal',
+): LineSlot {
+  let alignX = flipAlign(primary.alignX)
+  let alignY = flipAlign(primary.alignY)
+  // 主槽完全居中时翻转仍居中，强制对角
+  if (alignX === primary.alignX && alignY === primary.alignY) {
+    alignX = 'end'
+    alignY = 'end'
+  }
+  // 纵向「上+下」预设常为 center/start ↔ center/end，X 仍同列 → 强制次槽靠右
+  if (orientation === 'vertical' && alignX === 'center') {
+    alignX = 'end'
+  }
+  return {
+    alignX,
+    alignY,
+    offsetX: -primary.offsetX,
+    offsetY: -primary.offsetY,
+  }
+}
+
+/** 双行主槽：居中改左上；纵向同列居中改靠左，与次槽分列 */
+export function primarySlotForDual(
+  primary: LineSlot,
+  orientation: 'horizontal' | 'vertical' = 'horizontal',
+): LineSlot {
+  if (primary.alignX === 'center' && primary.alignY === 'center') {
+    return { ...primary, alignX: 'start', alignY: 'start' }
+  }
+  if (orientation === 'vertical' && primary.alignX === 'center') {
+    return { ...primary, alignX: 'start' }
+  }
+  return primary
+}
+
+/**
+ * 双行交错换行：偶句固定主槽、奇句固定次槽。
+ * active 为偶：主槽唱当前，次槽预告下一奇句；
+ * active 为奇：次槽唱当前，主槽已换到下一偶句（预告/待唱）。
+ */
+export function dualLaneAssignment(activeIndex: number, lineCount: number): {
+  primaryIndex: number | null
+  secondaryIndex: number | null
+  primaryOn: boolean
+  secondaryOn: boolean
+} {
+  if (lineCount <= 0 || activeIndex < 0) {
+    return { primaryIndex: null, secondaryIndex: null, primaryOn: false, secondaryOn: false }
+  }
+  const even = activeIndex % 2 === 0
+  if (even) {
+    const primaryIndex = activeIndex
+    const secondaryIndex = activeIndex + 1 < lineCount ? activeIndex + 1 : null
+    return {
+      primaryIndex,
+      secondaryIndex,
+      primaryOn: true,
+      secondaryOn: false,
+    }
+  }
+  const secondaryIndex = activeIndex
+  const primaryIndex = activeIndex + 1 < lineCount ? activeIndex + 1 : null
+  return {
+    primaryIndex,
+    secondaryIndex,
+    primaryOn: false,
+    secondaryOn: true,
+  }
+}
+
+/** 跟唱渐变方向：横向左→右，纵向自上而下 */
+export function karaokeGradientAngle(orientation: 'horizontal' | 'vertical'): string {
+  return orientation === 'vertical' ? '180deg' : '90deg'
 }
 
 /** 当前句内跟唱进度 0~1（按当前句→下一句时间线性） */

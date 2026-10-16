@@ -98,6 +98,17 @@ async function fileToRecord(
     }
   }
 
+  let mtimeMs = 0
+  let birthtimeMs = 0
+  try {
+    const st = await fs.stat(absFile)
+    mtimeMs = st.mtimeMs || 0
+    // Windows 上 birthtime 为创建时间；部分系统为 0 时回退 ctime
+    birthtimeMs = st.birthtimeMs > 0 ? st.birthtimeMs : st.ctimeMs || 0
+  } catch {
+    /* keep 0 */
+  }
+
   return {
     id,
     rootId: root.id,
@@ -111,6 +122,8 @@ async function fileToRecord(
     categoryIds: [],
     lyricsRel,
     addedAt: new Date().toISOString(),
+    mtimeMs,
+    birthtimeMs,
   }
 }
 
@@ -153,6 +166,10 @@ export async function rescanAllRoots(appRoot: string): Promise<TrackRecord[]> {
       categoryIds: old.categoryIds.length ? old.categoryIds : cur.categoryIds,
       lyricsRel: old.lyricsRel || cur.lyricsRel,
       titleDisplay: old.titleDisplay || cur.titleDisplay,
+      // 入库时间保留首次；文件时间用本次扫描
+      addedAt: old.addedAt || cur.addedAt,
+      mtimeMs: cur.mtimeMs ?? old.mtimeMs,
+      birthtimeMs: cur.birthtimeMs ?? old.birthtimeMs,
     })
   }
   const final = [...byId.values()]
@@ -164,6 +181,39 @@ export async function rescanAllRoots(appRoot: string): Promise<TrackRecord[]> {
   }
   saveLyricsMap(appRoot, nextMap)
   return final
+}
+
+/**
+ * 老曲库补文件时间：mtimeMs/birthtimeMs 是后加的字段，旧 tracks.json 里没有，
+ * 会导致首页「修改时间 / 创建时间」排序退化。这里只对缺失的记录做一次 stat
+ * （不重扫目录、不解析音频元数据），补完即写回，之后启动不再触发。
+ */
+export async function backfillTrackFileTimes(appRoot: string): Promise<boolean> {
+  const tracks = loadTracks(appRoot)
+  if (!tracks.length) return false
+  const pending = tracks.filter((t) => !t.mtimeMs || !t.birthtimeMs)
+  if (!pending.length) return false
+
+  const roots = loadRoots(appRoot)
+  const byId = new Map(tracks.map((t) => [t.id, t]))
+  let changed = false
+  for (const t of pending) {
+    const root = roots.find((r) => r.id === t.rootId)
+    if (!root) continue
+    try {
+      const st = await fs.stat(absoluteTrackPath(appRoot, root, t))
+      byId.set(t.id, {
+        ...t,
+        mtimeMs: t.mtimeMs || st.mtimeMs || 0,
+        birthtimeMs: t.birthtimeMs || (st.birthtimeMs > 0 ? st.birthtimeMs : st.ctimeMs || 0),
+      })
+      changed = true
+    } catch {
+      // 文件已不在：保持原样，交给「重新扫描曲库」清理
+    }
+  }
+  if (changed) saveTracks(appRoot, [...byId.values()])
+  return changed
 }
 
 export function trackToPlayable(
@@ -191,6 +241,9 @@ export function trackToPlayable(
     rootId: track.rootId,
     pathRel: track.pathRel,
     titleDisplay: track.titleDisplay,
+    addedAt: track.addedAt,
+    mtimeMs: track.mtimeMs,
+    birthtimeMs: track.birthtimeMs,
   }
 }
 

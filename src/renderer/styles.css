@@ -16,6 +16,8 @@
   --glow-a: #1e3a5f;
   --glow-b: #2a1f3d;
   --info-text-stroke: #0c1018;
+  /* 详情页歌词描边：固定深色，不跟反色逻辑走（浅色主题下白描边不可读） */
+  --page-lyric-stroke: #0c1018;
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --scrollbar-thumb: rgba(154, 168, 189, 0.45);
   --scrollbar-thumb-hover: rgba(154, 168, 189, 0.75);
@@ -105,6 +107,7 @@
   --danger: #c94b4b;
   --flat-color: #eef2f7;
   --info-text-stroke: #f4f7fb;
+  --page-lyric-stroke: #0c1018;
   --scrollbar-thumb: rgba(95, 111, 134, 0.5);
   --scrollbar-thumb-hover: rgba(95, 111, 134, 0.8);
 }
@@ -115,7 +118,7 @@
   }
 }
 
-/* 低透明度：信息文字反色描边（主题开关 + 不透明度 < 40%） */
+/* 低透明度：信息文字反色描边（主题开关 + 不透明度 < 40%；不含详情页歌词） */
 :root[data-low-opacity-stroke='1'] :is(
   .title,
   .meta,
@@ -127,9 +130,6 @@
   .menu-hint,
   .song-page-title,
   .song-page-sub,
-  .lyrics li,
-  .lyrics li .lyric-text,
-  .lyrics li .lyric-time,
   .vol span,
   .gain-line,
   .norm,
@@ -146,6 +146,22 @@
     1px 0 0 var(--info-text-stroke),
     0 -1px 0 var(--info-text-stroke),
     0 1px 0 var(--info-text-stroke);
+}
+
+/* 详情页歌词：统一深色描边（浅/深主题一致，避免浅色主题白描边） */
+.song-page .lyrics li,
+.song-page .lyrics li .lyric-text,
+.song-page .lyrics li .lyric-text-inner,
+.song-page .lyrics li .lyric-time,
+.song-page .lyrics li .lyric-karaoke-base,
+.song-page .lyrics li .lyric-karaoke-fill-text {
+  -webkit-text-stroke: 0.65px var(--page-lyric-stroke);
+  paint-order: stroke fill;
+  text-shadow:
+    -1px 0 0 var(--page-lyric-stroke),
+    1px 0 0 var(--page-lyric-stroke),
+    0 -1px 0 var(--page-lyric-stroke),
+    0 1px 0 var(--page-lyric-stroke);
 }
 
 * {
@@ -184,11 +200,44 @@ body {
 }
 
 :root[data-bg='image'] body {
+  /* 贴图由 .app-bg-layer 双缓冲负责，body 只铺底色，避免换图瞬间黑块 */
   background-color: var(--flat-color, var(--bg));
-  background-image: var(--bg-image);
-  background-size: cover;
-  background-position: center;
+  background-image: none;
+}
+
+/* 背景双图层：预载到空闲层再淡入 */
+.app-bg-stack {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.app-bg-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-color: transparent;
   background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  opacity: 0;
+  transition: opacity 0.48s ease;
+  will-change: opacity;
+}
+
+.app-bg-layer.on {
+  opacity: 1;
+}
+
+/* 上层淡入、下层垫底：交叉时不透出深色 body */
+.app-bg-layer.back {
+  z-index: 1;
+}
+
+.app-bg-layer.front {
+  z-index: 2;
 }
 
 /* 按钮：纯色/图片用实心，渐变背景模式主按钮才用轻微渐变 */
@@ -237,6 +286,8 @@ button.active-toggle {
 }
 
 .shell {
+  position: relative;
+  z-index: 1;
   height: 100%;
   display: grid;
   grid-template-rows: 40px 1fr;
@@ -257,9 +308,12 @@ button.active-toggle {
   align-items: center;
   padding: 0 0.9rem;
   min-width: 0;
-  /* 不用系统 CSS drag：切软件回来后常会失效；拖动走主进程 JS */
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
+  /*
+   * 系统 drag：最大化后拖顶栏会原生还原并继续拖（比 JS setBounds 可靠）。
+   * Alt+Tab 后偶发失效时由 TitleBar 重挂载本节点恢复。
+   */
+  -webkit-app-region: drag;
+  app-region: drag;
   cursor: default;
 }
 
@@ -423,9 +477,27 @@ button.active-toggle {
   height: 100%;
   min-height: 0;
   display: grid;
+  /* 三行固定语义：横幅(可空) / 主列表 / 播放条。避免无横幅时 .player 误吃 1fr 上漂 */
   grid-template-rows: auto 1fr auto;
   gap: 0.75rem;
   padding: 0.75rem 1rem 0.85rem;
+}
+
+.app > .banner {
+  grid-row: 1;
+  grid-column: 1;
+}
+
+.app > .layout-main {
+  grid-row: 2;
+  grid-column: 1;
+  min-height: 0;
+}
+
+.app > .player {
+  grid-row: 3;
+  grid-column: 1;
+  align-self: end;
 }
 
 .app.song-open > .layout-main {
@@ -532,6 +604,25 @@ button.active-toggle {
 .library-search:focus {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.library-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.library-sort-select {
+  min-width: 6.5rem;
+}
+
+.library-sort-dir {
+  /* 与左侧 UiSelect / 右侧「加入队列」等同高同底，不用 ghost 透明底 */
+  height: 34px;
+  padding: 0 0.75rem;
+  font-size: 0.85rem;
+  border-radius: 10px;
+  box-sizing: border-box;
 }
 
 .panel-toolbar {
@@ -1071,12 +1162,9 @@ button.active-toggle {
 }
 
 :root[data-bg='image'] .song-page::before {
-  background-color: var(--flat-color, var(--bg));
-  background-image: var(--bg-image);
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-attachment: fixed;
+  /* 透出底层双缓冲背景，不再单独挂一张易闪黑的 CSS 图 */
+  background-color: transparent;
+  background-image: none;
 }
 
 :root[data-bg='image'][data-page-bg-blur='1'] .song-page::before {
@@ -2111,6 +2199,91 @@ select.ui-select:hover,
   grid-template-columns: 1fr 1fr 1fr;
 }
 
+.seg-4 {
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+}
+
+.bg-rotate-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.bg-rotate-interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.bg-rotate-interval input {
+  width: 4.5rem;
+  height: 32px;
+  padding: 0 0.4rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--text);
+  font: inherit;
+}
+
+.bg-rotate-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.bg-rotate-list li {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.4rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg-soft) 80%, transparent);
+}
+
+.bg-rotate-list li.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.bg-rotate-thumb {
+  width: 40px;
+  height: 28px;
+  border-radius: 4px;
+  background: var(--bg-soft) center / cover no-repeat;
+  border: 1px solid var(--line);
+}
+
+.bg-rotate-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.82rem;
+}
+
+.bg-rotate-empty {
+  grid-template-columns: 1fr !important;
+  color: var(--muted);
+  font-size: 0.82rem;
+  border-style: dashed !important;
+}
+
+.bg-rotate-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
 .theme-head {
   display: flex;
   align-items: center;
@@ -2479,6 +2652,85 @@ select.ui-select:hover,
   max-height: 100%;
   overflow: hidden;
   padding-bottom: 0.25rem;
+}
+
+.lm-track-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.4rem;
+}
+
+.lm-track-search {
+  flex: 1 1 120px;
+  min-width: 100px;
+}
+
+.lm-tag-filters,
+.lm-tag-assign {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+
+.lm-tag-add {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+
+.lm-tag-add input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 0.45rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.lm-tag-chip {
+  height: 26px;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.lm-tag-chip.on {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.lm-tag-chip.sm {
+  height: 22px;
+  font-size: 0.72rem;
+}
+
+.lm-lib-lyrics {
+  margin: 0.35rem 0 0.5rem;
+  padding: 0.4rem;
+  border-radius: 8px;
+  border: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 200px;
+}
+
+.lm-lib-lyrics .lm-list {
+  max-height: 140px;
+  overflow: auto;
 }
 
 .lm-list {

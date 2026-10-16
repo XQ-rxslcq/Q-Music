@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { findLyricIndex, type LyricLine } from '../core/lyrics'
 import {
+  isActiveLineInCenterBand,
+  scrollLineToVerticalCenter,
+} from '../core/lyric-follow'
+import {
   karaokeLineProgress,
   lyricScrollOffset,
   mergePageLyrics,
@@ -23,8 +27,8 @@ type Props = {
   clickTitle?: string
   contextTitle?: string
   /**
-   * 父组件在「点击/拖动播放进度条」时递增，用于重新开启跟随。
-   * 用户滚动歌词列表或点歌词行后会关闭跟随，直到再次 seek。
+   * 父组件在「点击/拖动播放进度条」时递增，恢复默认跟随。
+   * 用户拖动后：仅当当前句仍在视口中心 ±20%（合计 40%）带内时，换句再居中对齐。
    */
   resumeFollowKey?: number
   /** 按行文本解析字体（详情页按语种） */
@@ -159,26 +163,67 @@ export default function LyricsPanel({
   )
   const listRef = useRef<HTMLUListElement | null>(null)
   const marked = useMemo(() => new Set(markedIndices || []), [markedIndices])
-  const [follow, setFollow] = useState(true)
+  /** 用户是否拖动过列表；未拖动时始终居中跟随 */
+  const userDetachedRef = useRef(false)
+  const programmaticScrollRef = useRef(false)
+  const programmaticClearTimer = useRef(0)
+  const [followHud, setFollowHud] = useState(true)
   const lastResumeKey = useRef(resumeFollowKey)
+  const lastFollowTarget = useRef(-1)
   const usePageFx = Boolean(pageLyrics)
 
   useEffect(() => {
     if (resumeFollowKey !== lastResumeKey.current) {
       lastResumeKey.current = resumeFollowKey
-      setFollow(true)
+      userDetachedRef.current = false
+      setFollowHud(true)
+      lastFollowTarget.current = -1
     }
   }, [resumeFollowKey])
 
   useEffect(() => {
-    if (!follow || !listRef.current) return
+    return () => {
+      if (programmaticClearTimer.current) window.clearTimeout(programmaticClearTimer.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
     const target = focusIndex != null && focusIndex >= 0 ? focusIndex : active
     if (target < 0) return
-    const el = listRef.current.querySelector(`[data-i="${target}"]`)
-    el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-  }, [active, focusIndex, follow])
+    const el = list.querySelector(`[data-i="${target}"]`) as HTMLElement | null
+    if (!el) return
 
-  const interruptFollow = () => setFollow(false)
+    const shouldSync = !userDetachedRef.current || isActiveLineInCenterBand(list, el, 0.2)
+    if (!shouldSync) {
+      setFollowHud(false)
+      return
+    }
+    // 同一目标且已跟随过则跳过，避免 smooth 滚动期间反复触发
+    if (lastFollowTarget.current === target) return
+    lastFollowTarget.current = target
+    programmaticScrollRef.current = true
+    if (programmaticClearTimer.current) window.clearTimeout(programmaticClearTimer.current)
+    scrollLineToVerticalCenter(list, el, 'smooth')
+    setFollowHud(true)
+    // smooth 滚动可能超过 450ms；过早清标志会把程序滚动误判成用户拖动
+    programmaticClearTimer.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false
+      programmaticClearTimer.current = 0
+    }, 700)
+  }, [active, focusIndex, lines.length])
+
+  const markUserScroll = () => {
+    if (programmaticScrollRef.current) return
+    userDetachedRef.current = true
+    setFollowHud(false)
+  }
+
+  const interruptFollow = () => {
+    userDetachedRef.current = true
+    setFollowHud(false)
+  }
 
   if (!lines.length) {
     return <div className="lyrics empty">{emptyText ?? '暂无歌词'}</div>
@@ -186,12 +231,13 @@ export default function LyricsPanel({
 
   return (
     <ul
-      className={`lyrics ${clickable ? 'clickable' : ''} ${follow ? 'following' : 'follow-off'}${usePageFx ? ' page-fx' : ''}`}
+      className={`lyrics ${clickable ? 'clickable' : ''} ${followHud ? 'following' : 'follow-off'}${usePageFx ? ' page-fx' : ''}`}
       ref={listRef}
-      onWheel={interruptFollow}
-      onTouchMove={interruptFollow}
+      onWheel={markUserScroll}
+      onScroll={markUserScroll}
+      onTouchMove={markUserScroll}
       onPointerDown={(e) => {
-        if (e.pointerType === 'touch' || e.pointerType === 'pen') interruptFollow()
+        if (e.pointerType === 'touch' || e.pointerType === 'pen') markUserScroll()
       }}
     >
       {lines.map((line, i) => {
