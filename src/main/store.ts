@@ -25,6 +25,7 @@ import {
   mergePageLyrics,
 } from '../core/library'
 import { isBgRotateDue, nextBgRotateRel, orderBgRotateRels } from '../core/bg-rotate'
+import { mergeThemeBackgroundFields, normalizeThemeBeforeSave } from '../core/theme-bg'
 import {
   makeWorkbenchTagId,
   mergeWorkbenchTags,
@@ -169,22 +170,28 @@ export function loadTheme(appRoot: string): ThemeSettings {
     raw.bgStyle === 'rotate'
       ? raw.bgStyle
       : DEFAULT_THEME.bgStyle
-  return {
+  const base: ThemeSettings = {
     ...DEFAULT_THEME,
     ...raw,
     bgStyle,
     bgRotate: mergeBgRotate(raw.bgRotate),
     desktopLyrics: mergeDesktopLyrics(raw.desktopLyrics),
     pageLyrics: mergePageLyrics(raw.pageLyrics),
+    singleBgImageRel:
+      typeof raw.singleBgImageRel === 'string' || raw.singleBgImageRel === null
+        ? raw.singleBgImageRel
+        : DEFAULT_THEME.singleBgImageRel,
   }
+  return mergeThemeBackgroundFields(base, raw.singleBgImageRel)
 }
 
 export function saveTheme(appRoot: string, theme: ThemeSettings) {
+  const next = normalizeThemeBeforeSave(theme)
   writeJson(resolveThemePath(appRoot), {
-    ...theme,
-    bgRotate: mergeBgRotate(theme.bgRotate),
-    desktopLyrics: mergeDesktopLyrics(theme.desktopLyrics),
-    pageLyrics: mergePageLyrics(theme.pageLyrics),
+    ...next,
+    bgRotate: mergeBgRotate(next.bgRotate),
+    desktopLyrics: mergeDesktopLyrics(next.desktopLyrics),
+    pageLyrics: mergePageLyrics(next.pageLyrics),
   })
 }
 

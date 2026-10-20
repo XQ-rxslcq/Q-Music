@@ -82,7 +82,10 @@ export type ThemeSettings = {
   lowOpacityTextStroke: boolean
   bgStyle: 'gradient' | 'flat' | 'image' | 'rotate'
   flatColor: string
+  /** 当前展示用（轮换时为当前张；单图时与 singleBgImageRel 一致） */
   bgImageRel: string | null
+  /** 单张背景图（qmdata/backgrounds/），与轮换池分离，切换模式时不丢 */
+  singleBgImageRel?: string | null
   /** 背景轮换（图片池在 qmdata/bg-rotate/） */
   bgRotate: BgRotateSettings
   desktopLyrics: DesktopLyricsSettings
@@ -97,6 +100,7 @@ export const DEFAULT_THEME: ThemeSettings = {
   bgStyle: 'gradient',
   flatColor: '#141820',
   bgImageRel: null,
+  singleBgImageRel: null,
   bgRotate: mergeBgRotate(DEFAULT_BG_ROTATE),
   desktopLyrics: mergeDesktopLyrics(DEFAULT_DESKTOP_LYRICS),
   pageLyrics: mergePageLyrics(DEFAULT_PAGE_LYRICS),

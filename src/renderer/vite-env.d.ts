@@ -34,6 +34,7 @@ export type ThemeSettings = {
   bgStyle: 'gradient' | 'flat' | 'image' | 'rotate'
   flatColor: string
   bgImageRel: string | null
+  singleBgImageRel?: string | null
   bgRotate: { intervalSec: number; lastSwitchedAt: number; order: string[] }
   desktopLyrics: DesktopLyricsSettings
   pageLyrics: PageLyricsSettings

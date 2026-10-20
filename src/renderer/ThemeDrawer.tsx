@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { BgRotateItem, ThemeSettings } from './vite-env'
 import { mergeBgRotate } from '../core/library-model'
+import { applyBgStyleChange } from '../core/theme-bg'
 import { moveBgRotateOrder } from '../core/bg-rotate'
 import ColorField from './ColorField'
 import DrawerShell from './DrawerShell'
@@ -139,28 +140,28 @@ export default function ThemeDrawer({
           <button
             type="button"
             className={value.bgStyle === 'gradient' ? 'active' : ''}
-            onClick={() => onChange({ ...value, bgStyle: 'gradient' })}
+            onClick={() => onChange(applyBgStyleChange(value, 'gradient'))}
           >
             渐变
           </button>
           <button
             type="button"
             className={value.bgStyle === 'flat' ? 'active' : ''}
-            onClick={() => onChange({ ...value, bgStyle: 'flat' })}
+            onClick={() => onChange(applyBgStyleChange(value, 'flat'))}
           >
             纯色
           </button>
           <button
             type="button"
             className={value.bgStyle === 'image' ? 'active' : ''}
-            onClick={() => onChange({ ...value, bgStyle: 'image' })}
+            onClick={() => onChange(applyBgStyleChange(value, 'image'))}
           >
             图片
           </button>
           <button
             type="button"
             className={value.bgStyle === 'rotate' ? 'active' : ''}
-            onClick={() => onChange({ ...value, bgStyle: 'rotate' })}
+            onClick={() => onChange(applyBgStyleChange(value, 'rotate'))}
           >
             轮换
           </button>
@@ -183,7 +184,9 @@ export default function ThemeDrawer({
           <button type="button" onClick={onPickBackground}>
             {value.bgImageRel ? '更换图片' : '选择图片'}
           </button>
-          {value.bgImageRel && <span className="theme-tip">{value.bgImageRel}</span>}
+          {(value.singleBgImageRel || value.bgImageRel) && (
+            <span className="theme-tip">{value.singleBgImageRel || value.bgImageRel}</span>
+          )}
         </label>
       )}
 

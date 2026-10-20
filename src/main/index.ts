@@ -386,7 +386,11 @@ async function syncDesktopLyricsWindow(theme = loadTheme(boot.dataDir)) {
 function buildThemePayload() {
   const theme = loadTheme(boot.dataDir)
   let bgImageUrl: string | null = null
-  const abs = backgroundFileUrl(boot.dataDir, theme.bgImageRel)
+  const rel =
+    theme.bgStyle === 'image' && theme.singleBgImageRel
+      ? theme.singleBgImageRel
+      : theme.bgImageRel
+  const abs = backgroundFileUrl(boot.dataDir, rel)
   if (abs) bgImageUrl = toMediaUrl(abs)
   return { theme, bgImageUrl }
 }
@@ -583,7 +587,18 @@ function createWindow() {
   win.on('focus', () => notifyChromeRefresh(win))
   win.on('maximize', () => notifyChromeRefresh(win))
   win.on('unmaximize', () => notifyChromeRefresh(win))
-  win.on('moved', () => ensureWindowOnScreen(win))
+  // 拖拽过程中 moved 会连续触发，此时回拉会与原生拖拽抢位置（表现为「拖不动」）；
+  // 故拖完静置后再兜底拉回可见区。
+  let onScreenTimer: ReturnType<typeof setTimeout> | null = null
+  const scheduleEnsureOnScreen = () => {
+    if (onScreenTimer) clearTimeout(onScreenTimer)
+    onScreenTimer = setTimeout(() => {
+      onScreenTimer = null
+      if (activeDrag) return
+      ensureWindowOnScreen(win)
+    }, 550)
+  }
+  win.on('moved', scheduleEnsureOnScreen)
   win.on('restore', () => {
     ensureWindowOnScreen(win)
     notifyChromeRefresh(win)
@@ -996,7 +1011,12 @@ app.whenReady().then(async () => {
     })
     if (result.canceled || !result.filePaths[0]) return themePayload()
     const rel = importBackgroundImage(boot.dataDir, result.filePaths[0])
-    const theme = { ...loadTheme(boot.dataDir), bgStyle: 'image' as const, bgImageRel: rel }
+    const theme = {
+      ...loadTheme(boot.dataDir),
+      bgStyle: 'image' as const,
+      singleBgImageRel: rel,
+      bgImageRel: rel,
+    }
     saveTheme(boot.dataDir, theme)
     return themePayload()
   })

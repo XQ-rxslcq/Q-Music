@@ -112,9 +112,23 @@ export default function LyricsMatchDrawer({
   const [lyricsFollowKey, setLyricsFollowKey] = useState(0)
   const [dirty, setDirty] = useState(false)
   const [pasteHeight, setPasteHeight] = useState(96)
+  /** 试听音量（独立于主播放器，本地记住） */
+  const [previewVolume, setPreviewVolume] = useState(() => {
+    const raw = Number(window.localStorage.getItem('qmusic.previewVolume'))
+    return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.85
+  })
+  const [previewMuted, setPreviewMuted] = useState(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  /** 已装载的试听地址，避免重复 load 打断播放 */
+  const previewUrlRef = useRef('')
+  const onPreviewPlayingChangeRef = useRef(onPreviewPlayingChange)
+  onPreviewPlayingChangeRef.current = onPreviewPlayingChange
   const pendingEditExisting = useRef(false)
   const pasteResizeRef = useRef<{ startY: number; startH: number } | null>(null)
+
+  useEffect(() => {
+    window.localStorage.setItem('qmusic.previewVolume', String(previewVolume))
+  }, [previewVolume])
 
   const markDirty = () => setDirty(true)
 
@@ -460,25 +474,76 @@ export default function LyricsMatchDrawer({
   useEffect(() => {
     const a = audioRef.current
     if (!a || !active) return
+    if (previewUrlRef.current === active.fileUrl) return
+    previewUrlRef.current = active.fileUrl
     a.src = active.fileUrl
     a.load()
     setPlaying(false)
     setT(0)
+    setDur(0)
   }, [active?.id, active?.fileUrl])
 
+  // 播放意图 → 音频元素。失败要让用户看见原因：旧实现静默 catch 成「点了没反应」
   useEffect(() => {
     const a = audioRef.current
     if (!a) return
-    if (playing) void a.play().catch(() => setPlaying(false))
-    else a.pause()
-    onPreviewPlayingChange?.(playing)
-  }, [playing, onPreviewPlayingChange])
+    if (playing) {
+      if (!a.currentSrc && !a.getAttribute('src')) {
+        setMsg('无法播放：该曲目缺少音频地址，可到首页「重新扫描曲库」后再试')
+        setPlaying(false)
+      } else {
+        const p = a.play()
+        if (p) {
+          p.catch((err: unknown) => {
+            // load/切曲造成的打断属正常竞态，不算失败
+            if ((err as { name?: string })?.name === 'AbortError') return
+            console.warn('[Q-Music] 工作台试听播放失败', err)
+            setMsg(`无法播放：${(err as { message?: string })?.message || '原因未知'}`)
+            setPlaying(false)
+          })
+        }
+      }
+    } else {
+      a.pause()
+    }
+    onPreviewPlayingChangeRef.current?.(playing)
+  }, [playing])
+
+  // 以元素真实状态为准：自行停下/解码失败时纠正按钮态
+  useEffect(() => {
+    if (!open) return
+    const a = audioRef.current
+    if (!a) return
+    const onPlay = () => setPlaying(true)
+    const onPause = () => setPlaying(false)
+    const onErr = () => {
+      console.warn('[Q-Music] 工作台音频加载失败', a.error)
+      setMsg('无法播放：音频加载失败（文件可能已移动，或格式不受支持）')
+      setPlaying(false)
+    }
+    a.addEventListener('play', onPlay)
+    a.addEventListener('pause', onPause)
+    a.addEventListener('error', onErr)
+    return () => {
+      a.removeEventListener('play', onPlay)
+      a.removeEventListener('pause', onPause)
+      a.removeEventListener('error', onErr)
+    }
+  }, [open])
+
+  // 试听音量 / 静音
+  useEffect(() => {
+    const a = audioRef.current
+    if (!a) return
+    a.volume = previewVolume
+    a.muted = previewMuted
+  }, [previewVolume, previewMuted, open, active?.id])
 
   useEffect(() => {
     if (open) return
     setPlaying(false)
-    onPreviewPlayingChange?.(false)
-  }, [open, onPreviewPlayingChange])
+    onPreviewPlayingChangeRef.current?.(false)
+  }, [open])
 
   if (!open) return null
 
@@ -1183,17 +1248,63 @@ export default function LyricsMatchDrawer({
               onEnded={() => setPlaying(false)}
             />
             <div className="lm-transport">
-              <TransportButtons
-                compact
-                playing={playing}
-                disabled={!active}
-                onToggle={() => setPlaying((p) => !p)}
-                onSeekBack={() => seekBy(-5)}
-                onSeekFwd={() => seekBy(5)}
-              />
-              <span className="theme-tip lm-time">
-                {formatTime(t)} / {formatTime(dur)}
-              </span>
+              <div className="lm-transport-main">
+                <TransportButtons
+                  compact
+                  playing={playing}
+                  disabled={!active}
+                  onToggle={() => setPlaying((p) => !p)}
+                  onSeekBack={() => seekBy(-5)}
+                  onSeekFwd={() => seekBy(5)}
+                />
+                <span className="theme-tip lm-time">
+                  {formatTime(t)} / {formatTime(dur)}
+                </span>
+              </div>
+              <div className="lm-vol-row">
+                <button
+                  type="button"
+                  className={`ctrl-btn lm-vol-btn ${previewMuted ? 'off' : ''}`}
+                  title={previewMuted ? '取消静音' : '静音'}
+                  aria-label={previewMuted ? '取消静音' : '静音'}
+                  onClick={() => setPreviewMuted((m) => !m)}
+                >
+                  {previewMuted ? (
+                    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+                      <path
+                        fill="currentColor"
+                        d="M4 9h3l4-3.5v13L7 15H4V9zm11.7-.9 1.4 1.4L15.4 12l1.7 1.7-1.4 1.4L14 13.4l-1.7 1.7-1.4-1.4L12.6 12l-1.7-1.7 1.4-1.4L14 10.6l1.7-1.5z"
+                      />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+                      <path
+                        fill="currentColor"
+                        d="M4 9h3l4-3.5v13L7 15H4V9zm9.5-.9a4.6 4.6 0 0 1 0 7.8v-1.7a3 3 0 0 0 0-4.4V8.1zm2-2.6a7.6 7.6 0 0 1 0 13v-1.8a5.8 5.8 0 0 0 0-9.4V5.5z"
+                      />
+                    </svg>
+                  )}
+                </button>
+                <input
+                  className="ui-range lm-vol"
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={previewVolume}
+                  title={`试听音量 ${Math.round(previewVolume * 100)}%`}
+                  aria-label="试听音量"
+                  style={
+                    { '--range-progress': `${previewVolume * 100}%` } as CSSProperties
+                  }
+                  onChange={(e) => {
+                    const v = Number(e.target.value)
+                    setPreviewVolume(v)
+                    if (previewMuted && v > 0) setPreviewMuted(false)
+                  }}
+                />
+                <span className="theme-tip lm-vol-num">{Math.round(previewVolume * 100)}%</span>
+              </div>
             </div>
             <input
               className="ui-range"
