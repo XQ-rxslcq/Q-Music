@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { BgRotateItem, ThemeSettings } from './vite-env'
 import { mergeBgRotate } from '../core/library-model'
-import { applyBgStyleChange } from '../core/theme-bg'
+import { applyBgStyleChange, selectSingleBackground } from '../core/theme-bg'
 import { moveBgRotateOrder } from '../core/bg-rotate'
 import ColorField from './ColorField'
 import DrawerShell from './DrawerShell'
@@ -36,8 +36,10 @@ export default function ThemeDrawer({
   /** 间隔输入框草稿：输入过程中不回写，避免 5 秒下限把中间态夹掉（如想打 30 先被改成 5→50） */
   const [intervalDraft, setIntervalDraft] = useState<string | null>(null)
 
+  const needsWallpaperList = value.bgStyle === 'rotate' || value.bgStyle === 'image'
+
   useEffect(() => {
-    if (!open || value.bgStyle !== 'rotate') return
+    if (!open || !needsWallpaperList) return
     let cancelled = false
     void window.qmusic.listBgRotate().then((res) => {
       if (cancelled) return
@@ -47,12 +49,13 @@ export default function ThemeDrawer({
     return () => {
       cancelled = true
     }
-  }, [open, value.bgStyle, onThemePayload])
+  }, [open, needsWallpaperList, onThemePayload])
 
   if (!open) return null
 
   const opacityPct = Math.round(value.panelOpacity * 100)
   const intervalSec = mergeBgRotate(value.bgRotate).intervalSec
+  const imageSelectedRel = value.singleBgImageRel ?? value.bgImageRel
 
   const applyRotatePayload = (res: {
     items: BgRotateItem[]
@@ -68,6 +71,9 @@ export default function ThemeDrawer({
     try {
       const res = await window.qmusic.addBgRotate()
       applyRotatePayload(res)
+      if (value.bgStyle === 'image' && res.theme) {
+        onChange(res.theme)
+      }
     } finally {
       setRotateBusy(false)
     }
@@ -78,6 +84,9 @@ export default function ThemeDrawer({
     try {
       const res = await window.qmusic.removeBgRotate(rel)
       applyRotatePayload(res)
+      if (value.bgStyle === 'image' && res.theme) {
+        onChange(res.theme)
+      }
     } finally {
       setRotateBusy(false)
     }
@@ -95,6 +104,84 @@ export default function ThemeDrawer({
       setRotateBusy(false)
     }
   }
+
+  const onSelectRotateSlide = (rel: string) => {
+    onChange({
+      ...value,
+      bgImageRel: rel,
+      bgRotate: mergeBgRotate({
+        ...value.bgRotate,
+        lastSwitchedAt: Date.now(),
+      }),
+    })
+  }
+
+  const wallpaperList = (
+    <ul className="bg-rotate-list">
+      {rotateItems.map((item, i) => {
+        const active =
+          value.bgStyle === 'image'
+            ? imageSelectedRel === item.rel
+            : value.bgImageRel === item.rel
+        return (
+          <li
+            key={item.rel}
+            className={active ? 'active' : ''}
+            role="button"
+            tabIndex={0}
+            onClick={() => {
+              if (value.bgStyle === 'image') onChange(selectSingleBackground(value, item.rel))
+              else onSelectRotateSlide(item.rel)
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return
+              e.preventDefault()
+              if (value.bgStyle === 'image') onChange(selectSingleBackground(value, item.rel))
+              else onSelectRotateSlide(item.rel)
+            }}
+          >
+            <span className="bg-rotate-thumb" style={{ backgroundImage: `url("${item.url}")` }} />
+            <span className="bg-rotate-name" title={item.rel}>
+              {item.name}
+            </span>
+            {value.bgStyle === 'rotate' && (
+              <span className="bg-rotate-move" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={rotateBusy || i === 0}
+                  title="上移"
+                  onClick={() => void onMoveRotate(item.rel, -1)}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={rotateBusy || i >= rotateItems.length - 1}
+                  title="下移"
+                  onClick={() => void onMoveRotate(item.rel, 1)}
+                >
+                  ↓
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={rotateBusy}
+                  onClick={() => void onRemoveRotate(item.rel)}
+                >
+                  删除
+                </button>
+              </span>
+            )}
+          </li>
+        )
+      })}
+      {!rotateItems.length && (
+        <li className="bg-rotate-empty">还没有图片，点「添加图片」</li>
+      )}
+    </ul>
+  )
 
   return (
     <DrawerShell open={open} title="外观" onClose={onClose} panelClassName="theme-drawer">
@@ -179,20 +266,26 @@ export default function ThemeDrawer({
       )}
 
       {value.bgStyle === 'image' && (
-        <label className="theme-field">
-          <span>背景图（复制到 qmdata/backgrounds）</span>
-          <button type="button" onClick={onPickBackground}>
-            {value.bgImageRel ? '更换图片' : '选择图片'}
-          </button>
-          {(value.singleBgImageRel || value.bgImageRel) && (
-            <span className="theme-tip">{value.singleBgImageRel || value.bgImageRel}</span>
-          )}
-        </label>
+        <div className="theme-field">
+          <span>背景图（图库共用；记住你点选的那一张）</span>
+          <div className="bg-rotate-toolbar">
+            <button type="button" onClick={onPickBackground}>
+              {imageSelectedRel ? '从文件导入到 backgrounds' : '从文件导入'}
+            </button>
+            <button type="button" disabled={rotateBusy} onClick={() => void onAddRotate()}>
+              添加到图库
+            </button>
+          </div>
+          {wallpaperList}
+          <span className="theme-tip">
+            点击缩略图设为当前背景；与「轮换」共用图库，切换模式后会记住你选中的那张。
+          </span>
+        </div>
       )}
 
       {value.bgStyle === 'rotate' && (
         <div className="theme-field">
-          <span>背景轮换（qmdata/bg-rotate）</span>
+          <span>背景轮换（qmdata/bg-rotate + backgrounds）</span>
           <div className="bg-rotate-toolbar">
             <label className="bg-rotate-interval">
               <span>间隔（秒）</span>
@@ -207,7 +300,6 @@ export default function ThemeDrawer({
                   const raw = e.target.value
                   setIntervalDraft(raw)
                   const n = Number(raw)
-                  // 仅提交合法区间内的值；越界值留到失焦时再夹取（≥5 / ≤86400）
                   if (Number.isFinite(n) && n >= 5 && n <= 86400) {
                     onChange({
                       ...value,
@@ -234,48 +326,8 @@ export default function ThemeDrawer({
               添加图片
             </button>
           </div>
-          <ul className="bg-rotate-list">
-            {rotateItems.map((item, i) => (
-              <li key={item.rel} className={value.bgImageRel === item.rel ? 'active' : ''}>
-                <span className="bg-rotate-thumb" style={{ backgroundImage: `url("${item.url}")` }} />
-                <span className="bg-rotate-name" title={item.rel}>
-                  {item.name}
-                </span>
-                <span className="bg-rotate-move">
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={rotateBusy || i === 0}
-                    title="上移"
-                    onClick={() => void onMoveRotate(item.rel, -1)}
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={rotateBusy || i >= rotateItems.length - 1}
-                    title="下移"
-                    onClick={() => void onMoveRotate(item.rel, 1)}
-                  >
-                    ↓
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    disabled={rotateBusy}
-                    onClick={() => void onRemoveRotate(item.rel)}
-                  >
-                    删除
-                  </button>
-                </span>
-              </li>
-            ))}
-            {!rotateItems.length && (
-              <li className="bg-rotate-empty">还没有图片，点「添加图片」放入轮换池</li>
-            )}
-          </ul>
-          <span className="theme-tip">↑↓ 调整轮换顺序；间隔单位为秒，写入 theme.json。</span>
+          {wallpaperList}
+          <span className="theme-tip">点击可预览当前张；↑↓ 调整轮换顺序；间隔单位为秒。</span>
         </div>
       )}
 

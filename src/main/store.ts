@@ -325,6 +325,32 @@ export function backgroundFileUrl(dataDir: string, bgImageRel: string | null): s
 
 const BG_ROTATE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'])
 
+/** 列出 qmdata/backgrounds 内单图（相对路径） */
+export function listSingleBackgroundRels(dataDir: string): string[] {
+  const dir = resolveBackgroundsDir(dataDir)
+  fs.mkdirSync(dir, { recursive: true })
+  try {
+    return fs
+      .readdirSync(dir)
+      .filter((name) => BG_ROTATE_EXTS.has(path.extname(name).toLowerCase()))
+      .map((name) => toRelativeIfUnderRoot(dataDir, path.join(dir, name)))
+      .sort((a, b) => a.localeCompare(b, 'zh'))
+  } catch {
+    return []
+  }
+}
+
+/** 轮换池 + backgrounds 合并列表（轮换顺序优先，其余单图追加） */
+export function listWallpaperRels(dataDir: string, order?: string[]): string[] {
+  const rotate = listBgRotateRels(dataDir, order)
+  const seen = new Set(rotate)
+  const out = [...rotate]
+  for (const rel of listSingleBackgroundRels(dataDir)) {
+    if (!seen.has(rel)) out.push(rel)
+  }
+  return out
+}
+
 /** 列出轮换池内图片（相对 qmdata；按 theme.bgRotate.order，其余按文件名） */
 export function listBgRotateRels(dataDir: string, order?: string[]): string[] {
   const dir = resolveBgRotateDir(dataDir)

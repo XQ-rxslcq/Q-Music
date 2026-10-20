@@ -2250,6 +2250,7 @@ select.ui-select:hover,
   border-radius: 8px;
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--bg-soft) 80%, transparent);
+  cursor: pointer;
 }
 
 .bg-rotate-list li.active {
@@ -2871,10 +2872,20 @@ select.ui-select:hover,
 
 .lm-vol-btn {
   flex: 0 0 auto;
-  padding: 0.05rem 0.2rem;
-  min-width: 1.35rem;
-  min-height: 1.35rem;
+  padding: 0;
+  min-width: 0.7rem;
+  min-height: 0.7rem;
+  width: 0.7rem;
+  height: 0.7rem;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lm-vol-btn svg {
+  width: 10px;
+  height: 10px;
 }
 
 .lm-vol-btn.off {

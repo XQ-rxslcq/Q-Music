@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_THEME } from '../src/core/library-model'
-import { applyBgStyleChange, mergeThemeBackgroundFields } from '../src/core/theme-bg'
+import {
+  applyBgStyleChange,
+  mergeThemeBackgroundFields,
+  selectSingleBackground,
+} from '../src/core/theme-bg'
 
 describe('theme-bg', () => {
   it('切换轮换→单图时恢复 singleBgImageRel', () => {
@@ -24,5 +28,12 @@ describe('theme-bg', () => {
       bgImageRel: 'bg-rotate/stale.jpg',
     })
     expect(t.bgImageRel).toBe('backgrounds/a.jpg')
+  })
+
+  it('点选轮换池图片可记为单图选中', () => {
+    const t = selectSingleBackground(DEFAULT_THEME, 'bg-rotate/pool.jpg')
+    expect(t.singleBgImageRel).toBe('bg-rotate/pool.jpg')
+    expect(t.bgImageRel).toBe('bg-rotate/pool.jpg')
+    expect(t.bgStyle).toBe('image')
   })
 })

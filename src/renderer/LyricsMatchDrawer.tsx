@@ -1270,14 +1270,14 @@ export default function LyricsMatchDrawer({
                   onClick={() => setPreviewMuted((m) => !m)}
                 >
                   {previewMuted ? (
-                    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+                    <svg viewBox="0 0 24 24" width="10" height="10" aria-hidden>
                       <path
                         fill="currentColor"
                         d="M4 9h3l4-3.5v13L7 15H4V9zm11.7-.9 1.4 1.4L15.4 12l1.7 1.7-1.4 1.4L14 13.4l-1.7 1.7-1.4-1.4L12.6 12l-1.7-1.7 1.4-1.4L14 10.6l1.7-1.5z"
                       />
                     </svg>
                   ) : (
-                    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden>
+                    <svg viewBox="0 0 24 24" width="10" height="10" aria-hidden>
                       <path
                         fill="currentColor"
                         d="M4 9h3l4-3.5v13L7 15H4V9zm9.5-.9a4.6 4.6 0 0 1 0 7.8v-1.7a3 3 0 0 0 0-4.4V8.1zm2-2.6a7.6 7.6 0 0 1 0 13v-1.8a5.8 5.8 0 0 0 0-9.4V5.5z"

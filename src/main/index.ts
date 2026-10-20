@@ -23,6 +23,7 @@ import {
   importBackgroundImage,
   importBgRotateImage,
   listBgRotateRels,
+  listWallpaperRels,
   loadCategories,
   loadGains,
   loadHotkeys,
@@ -1024,7 +1025,7 @@ app.whenReady().then(async () => {
   const bgRotatePayload = () => {
     const theme = loadTheme(boot.dataDir)
     const rotate = mergeBgRotate(theme.bgRotate)
-    const items = listBgRotateRels(boot.dataDir, rotate.order).map((rel) => {
+    const items = listWallpaperRels(boot.dataDir, rotate.order).map((rel) => {
       const abs = backgroundFileUrl(boot.dataDir, rel)
       return {
         rel,
@@ -1052,11 +1053,18 @@ app.whenReady().then(async () => {
     }
     const disk = listBgRotateRels(boot.dataDir, [])
     const order = [...rotate.order.filter((r) => disk.includes(r)), ...added.filter((r) => !rotate.order.includes(r))]
+    const first = added[0] || null
     const next = {
       ...theme,
-      bgStyle: 'rotate' as const,
+      bgStyle: theme.bgStyle === 'image' ? ('image' as const) : ('rotate' as const),
+      singleBgImageRel:
+        theme.bgStyle === 'image' ? theme.singleBgImageRel ?? first : theme.singleBgImageRel,
       bgImageRel:
-        theme.bgImageRel && disk.includes(theme.bgImageRel) ? theme.bgImageRel : added[0] || null,
+        theme.bgStyle === 'image'
+          ? theme.singleBgImageRel ?? first
+          : theme.bgImageRel && disk.includes(theme.bgImageRel)
+            ? theme.bgImageRel
+            : first,
       bgRotate: mergeBgRotate({
         ...rotate,
         order,
@@ -1078,9 +1086,14 @@ app.whenReady().then(async () => {
     if (bgImageRel === target || (bgImageRel && !rels.includes(bgImageRel))) {
       bgImageRel = rels[0] || null
     }
+    let singleBgImageRel = theme.singleBgImageRel ?? null
+    if (singleBgImageRel === target || (singleBgImageRel && !rels.includes(singleBgImageRel))) {
+      singleBgImageRel = rels.find((r) => r !== target) || null
+    }
     saveTheme(boot.dataDir, {
       ...theme,
       bgImageRel,
+      singleBgImageRel,
       bgRotate: mergeBgRotate({
         ...rotate,
         order: rels,
